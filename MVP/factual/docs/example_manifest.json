@@ -1,0 +1,44 @@
+{
+  "original_video": "temp/20230615123456/reel.mp4",
+  "final_video": "output/20230615123456/factual_output.mp4",
+  "interventions": [
+    {
+      "timestamp_start": 3.2,
+      "timestamp_end": 5.8,
+      "claim_text": "The Earth is flat.",
+      "intervention_text": "The Earth is not flat but an oblate spheroid. This has been confirmed by satellite imagery, physics calculations, and direct observation.",
+      "intervention_type": "correction",
+      "audio_file": "temp/20230615123456/tts/intervention_0.mp3",
+      "duration": 6.5
+    },
+    {
+      "timestamp_start": 12.5,
+      "timestamp_end": 15.3,
+      "claim_text": "Vaccines cause autism.",
+      "intervention_text": "Extensive scientific research has found no link between vaccines and autism. This misconception stems from a discredited 1998 study that was later retracted.",
+      "intervention_type": "correction",
+      "audio_file": "temp/20230615123456/tts/intervention_1.mp3",
+      "duration": 7.8
+    },
+    {
+      "timestamp_start": 22.1,
+      "timestamp_end": 24.6,
+      "claim_text": "The Great Wall of China is visible from space.",
+      "intervention_text": "The Great Wall of China is generally not visible to the naked eye from low Earth orbit. While it can be seen in radar imagery, astronauts report it's difficult to spot without magnification.",
+      "intervention_type": "correction",
+      "audio_file": "temp/20230615123456/tts/intervention_2.mp3",
+      "duration": 8.2
+    },
+    {
+      "timestamp_start": 35.4,
+      "timestamp_end": 38.9,
+      "claim_text": "Mount Everest is the tallest mountain on Earth.",
+      "intervention_text": "Mount Everest is indeed the highest mountain above sea level at 29,032 feet. This fact is correctly stated.",
+      "intervention_type": "confirmation",
+      "audio_file": "temp/20230615123456/tts/intervention_3.mp3",
+      "duration": 6.1
+    }
+  ],
+  "total_video_duration": 65.7,
+  "processed_at": "2023-06-15T12:34:56.789012"
+} 

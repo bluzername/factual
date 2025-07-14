@@ -1,0 +1,19 @@
+# Example batch file for Factual pipeline
+# Lines starting with # are comments and will be ignored
+# Each line should contain one Instagram or Facebook reel URL
+
+# Example Instagram reels (replace with actual URLs)
+https://www.instagram.com/reel/DE_C78HyOVM/
+https://www.instagram.com/reel/EXAMPLE123/
+https://www.instagram.com/reel/ANOTHER456/
+
+# Example Facebook reels (replace with actual URLs)
+# https://www.facebook.com/watch?v=123456789
+
+# You can add as many URLs as needed
+# Empty lines are ignored
+
+# Tips:
+# - Make sure each URL is on its own line
+# - Remove any tracking parameters if possible
+# - Test with a few URLs first before running large batches 
