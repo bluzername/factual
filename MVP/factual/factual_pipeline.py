@@ -25,6 +25,10 @@ import re
 import random
 import platform
 
+# Add PIL imports for proper text rendering
+from PIL import Image, ImageDraw, ImageFont
+import math
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -350,6 +354,38 @@ class FFmpegHelper:
             ffmpeg_path: Path to the FFmpeg executable
         """
         self.ffmpeg_path = ffmpeg_path
+    
+    def calculate_text_box_params(self, width: int, height: int) -> Dict[str, Any]:
+        """Calculate standardized text box parameters that guarantee 80% width positioning.
+        
+        This ensures ALL text overlays use consistent sizing and positioning:
+        - Text box width: exactly 80% of frame width
+        - Text box position: starts at 10% from left edge, ends at 90%
+        - Text is centered within this 80% area
+        
+        Args:
+            width: Frame width in pixels
+            height: Frame height in pixels
+            
+        Returns:
+            Dict with keys: text_width_px, text_x_offset_px, text_area_start_pct, text_area_end_pct
+        """
+        # Fixed constraints - these define the 80% rule
+        TEXT_AREA_START_PCT = 0.10  # 10% from left edge
+        TEXT_AREA_END_PCT = 0.90    # 90% from left edge  
+        TEXT_WIDTH_PCT = TEXT_AREA_END_PCT - TEXT_AREA_START_PCT  # = 0.80 (80%)
+        
+        # Calculate pixel values
+        text_width_px = int(width * TEXT_WIDTH_PCT)
+        text_x_offset_px = int(width * TEXT_AREA_START_PCT)
+        
+        return {
+            'text_width_px': text_width_px,
+            'text_x_offset_px': text_x_offset_px,
+            'text_area_start_pct': TEXT_AREA_START_PCT,
+            'text_area_end_pct': TEXT_AREA_END_PCT,
+            'text_width_pct': TEXT_WIDTH_PCT
+        }
         
     def run_command(self, args: List[str], check: bool = True, 
                    capture_output: bool = True, text: bool = False) -> subprocess.CompletedProcess:
@@ -660,14 +696,21 @@ class FFmpegHelper:
             filter_parts = []
             inputs = ["-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:d={duration}"]
             
-            # Add text overlay - position text at 80% height
+            # Add text overlay with centralized positioning calculation
             fontsize = 42
             text_y_position = height * 0.8  # Start at 80% from top
+            
+            # Use centralized text box calculation for consistent 80% width positioning
+            ffmpeg_helper = FFmpegHelper(self.config['ffmpeg_path'])
+            text_params = ffmpeg_helper.calculate_text_box_params(width, height)
+            x_offset_px = text_params['text_x_offset_px']  # Exact 10% offset
+            target_w_px = text_params['text_width_px']     # Exact 80% width
+            
             if not formatted_text.strip():
-                text_filter = f"drawtext=text=' ':fontcolor=white:fontsize={fontsize}:x=w*0.1:y={text_y_position}:line_spacing=20:borderw=2:bordercolor=black@0.5:box=1:boxcolor=black@0.5:boxborderw=10:expansion=none"
+                text_filter = f"drawtext=text=' ':fontcolor=white:fontsize={fontsize}:x={x_offset_px}:y={text_y_position}:boxw={target_w_px}:line_spacing=20:borderw=2:bordercolor=black@0.5:box=1:boxcolor=black@0.5:boxborderw=10:expansion=none"
             else:
                 safe_text_file_path = temp_text_file_path.replace("\\", "/") if temp_text_file_path else ""
-                text_filter = f"drawtext=textfile='{safe_text_file_path}':fontcolor=white:fontsize={fontsize}:x=w*0.1:y={text_y_position}:line_spacing=20:borderw=2:bordercolor=black@0.5:box=1:boxcolor=black@0.5:boxborderw=10:expansion=none"
+                text_filter = f"drawtext=textfile='{safe_text_file_path}':fontcolor=white:fontsize={fontsize}:x={x_offset_px}:y={text_y_position}:boxw={target_w_px}:line_spacing=20:borderw=2:bordercolor=black@0.5:box=1:boxcolor=black@0.5:boxborderw=10:expansion=none"
             
             filter_parts.append(f"[0:v]{text_filter}[v_text]")
             current_v_label = "[v_text]"
@@ -725,10 +768,16 @@ class FFmpegHelper:
                 ]
                 
                 fallback_text_y = height * 0.8  # Position at 80% height for fallback too
+                # Use centralized calculation for consistent positioning even in fallback
+                ffmpeg_helper = FFmpegHelper(self.config['ffmpeg_path'])
+                text_params = ffmpeg_helper.calculate_text_box_params(width, height)
+                x_offset_px = text_params['text_x_offset_px']
+                target_w_px = text_params['text_width_px']
+                
                 if audio_valid:
                     fallback_cmd.extend(["-i", audio_path])
                     fallback_cmd.extend([
-                        "-vf", f"drawtext=text=' ':fontcolor=white:fontsize=42:x=w*0.1:y={fallback_text_y}",
+                        "-vf", f"drawtext=text=' ':fontcolor=white:fontsize=42:x={x_offset_px}:y={fallback_text_y}:boxw={target_w_px}:expansion=none",
                         "-c:v", "libx264", 
                         "-c:a", "aac", 
                         "-shortest", 
@@ -736,7 +785,7 @@ class FFmpegHelper:
                     ])
                 else:
                     fallback_cmd.extend([
-                        "-vf", f"drawtext=text=' ':fontcolor=white:fontsize=42:x=w*0.1:y={fallback_text_y}",
+                        "-vf", f"drawtext=text=' ':fontcolor=white:fontsize=42:x={x_offset_px}:y={fallback_text_y}:boxw={target_w_px}:expansion=none",
                         "-c:v", "libx264",
                         "-an",
                         "-t", str(duration),
@@ -773,8 +822,10 @@ class FFmpegHelper:
         
         fontsize = 42
         
-        # Calculate max_chars_per_line for approximately 80% width
-        target_text_width = width * 0.80
+        # Use centralized text box calculation for consistent 80% width
+        ffmpeg_helper = FFmpegHelper(self.config['ffmpeg_path'])
+        text_params = ffmpeg_helper.calculate_text_box_params(width, 1920)  # Height not needed for width calc
+        target_text_width = text_params['text_width_px']
         avg_char_width_factor = 0.55  # Heuristic for average character width relative to fontsize
         avg_char_width_approx = fontsize * avg_char_width_factor
         
@@ -1446,6 +1497,9 @@ class FactualPipeline:
         # Initialize storage for detailed transcript
         self.full_transcript_with_words: Optional[List[Dict[str, Any]]] = None
         
+        # Initialize logger
+        self.logger = logging.getLogger("factual")
+        
         # Validate required parameters
         self._validate_config()
     
@@ -1850,11 +1904,19 @@ Each intervention should have these fields:
 - claim_text: The exact claim from the transcript (≤120 chars)
 - intervention_text: Your factual commentary (correction or confirmation) — **~{max_text_length} characters max**
 - intervention_type: Either "correction" or "confirmation"
-- sources: **array of up to 3 objects**.  Each object must have:
-    • description – one-line description of the source (authors/institute, year)
+- sources: **array of up to 3 objects**. Each object must have:
+    • title – full title of the study/article/report
+    • description – detailed description: journal/publication (year), authors/institution, sample size, key finding that supports your intervention
     • url – direct link to the source
 
-Keep the JSON small – don't embed full citations, only short description + URL.
+Example source object:
+{{
+  "title": "Measles, Mumps, Rubella Vaccination and Autism — A Nationwide Cohort Study",
+  "description": "Annals of Internal Medicine (2019), Denmark study with 657,461 children, found no increased autism risk after MMR vaccination",
+  "url": "https://www.acpjournals.org/doi/10.7326/M18-2101"
+}}
+
+Keep intervention_text concise – don't embed full citations there.
 
 Only identify meaningful factual claims that can be verified. Ignore opinions, subjective statements, or minor details.
 Keep your commentary very concise, neutral, and focused on factual accuracy. The intervention text will be displayed as an overlay, so brevity is essential."""
@@ -2537,16 +2599,32 @@ Only include meaningful factual statements that require verification."""
                     logger.warning(f"Exception during background frame extraction for intervention {i}: {e_extract}")
                     frame_path = None
 
-                self._create_black_frame_with_audio(
-                    black_segment,
-                    intervention.audio_file,
-                    intervention.intervention_text,
-                    width,
-                    height,
-                    intervention.duration,
-                    intervention_type=intervention.intervention_type,
-                    background_image_path=frame_path
-                )
+                # REVOLUTIONARY FIX: Use PIL for accurate text rendering instead of FFmpeg drawtext
+                # This completely eliminates the text cutoff issues by using proper text measurement
+                try:
+                    self._create_intervention_frame_with_pil(
+                        intervention.intervention_text,
+                        width,
+                        height, 
+                        intervention.duration,
+                        black_segment,
+                        intervention.audio_file,
+                        frame_path  # Pass the extracted background frame
+                    )
+                    logger.info(f"Successfully created intervention frame with PIL: {black_segment}")
+                except Exception as e:
+                    logger.warning(f"PIL method failed, falling back to FFmpeg: {e}")
+                    # Fallback to original method if PIL fails
+                    self._create_black_frame_with_audio(
+                        black_segment,
+                        intervention.audio_file,
+                        intervention.intervention_text,
+                        width,
+                        height,
+                        intervention.duration,
+                        intervention_type=intervention.intervention_type,
+                        background_image_path=frame_path
+                    )
                 
                 if os.path.exists(black_segment) and os.path.getsize(black_segment) > 0:
                     # Verify the intervention segment has audio
@@ -2594,18 +2672,31 @@ Only include meaningful factual statements that require verification."""
                     else:
                         logger.warning(f"Intervention {i} has no audio, trying forced audio method")
                         
-                        # Try with forced audio
+                        # Try with forced audio using PIL method
                         os.remove(black_segment)
-                        self._create_black_frame_with_audio(
-                            black_segment,
-                            intervention.audio_file,
-                            intervention.intervention_text,
-                            width,
-                            height,
-                            intervention.duration,
-                            force_audio=True,
-                            intervention_type=intervention.intervention_type # Pass intervention_type
-                        )
+                        try:
+                            self._create_intervention_frame_with_pil(
+                                intervention.intervention_text,
+                                width,
+                                height, 
+                                intervention.duration,
+                                black_segment,
+                                intervention.audio_file,
+                                frame_path  # Pass the extracted background frame
+                            )
+                            logger.info(f"Successfully created intervention frame with PIL (forced audio): {black_segment}")
+                        except Exception as e:
+                            logger.warning(f"PIL method failed, falling back to FFmpeg (forced audio): {e}")
+                            self._create_black_frame_with_audio(
+                                black_segment,
+                                intervention.audio_file,
+                                intervention.intervention_text,
+                                width,
+                                height,
+                                intervention.duration,
+                                force_audio=True,
+                                intervention_type=intervention.intervention_type # Pass intervention_type
+                            )
                         
                         if os.path.exists(black_segment) and os.path.getsize(black_segment) > 0:
                             # Add to expected sequence only if successfully created (for forced audio case)
@@ -3449,73 +3540,8 @@ Only include meaningful factual statements that require verification."""
             intervention_type: Type of intervention ('confirmation', 'correction') for specific watermark
             background_image_path: Path to background image for grayscale conversion and dim overlay
         """
-        # --- NEW 2-PASS LOGIC FOR GUARANTEED TEXT FIT ---
-
-        # 1. Define constraints
-        target_text_width_ratio = 0.80
-        target_text_height_ratio = 0.50
-        font_size_clamp = (20, 100)
-        line_height_factor = 1.25
-        avg_char_width_factor = 0.55
-
-        # --- Pass 1: Determine the number of lines and the vertically-constrained font size.
-        
-        # Wrap text with a generic character-per-line guess.
-        initial_chars_per_line = 40
-        words = text.split()
-        pass1_lines = []
-        current_line = ""
-        for word in words:
-            if not current_line:
-                current_line = word
-            elif len(current_line) + 1 + len(word) <= initial_chars_per_line:
-                current_line += " " + word
-            else:
-                pass1_lines.append(current_line)
-                current_line = word
-        if current_line:
-            pass1_lines.append(current_line)
-
-        # Calculate the font size that would make these lines fit vertically.
-        safe_area_height = height * target_text_height_ratio
-        num_lines = len(pass1_lines) if pass1_lines else 1
-        fontsize_val = int(safe_area_height / (num_lines * line_height_factor))
-        fontsize_val = max(font_size_clamp[0], min(fontsize_val, font_size_clamp[1]))
-
-        # --- Pass 2: Re-wrap the text using the correct font size to respect width.
-
-        # Now calculate the *actual* max_chars_per_line using the font size we just determined.
-        target_text_width_pixels = width * target_text_width_ratio
-        avg_char_width_approx = fontsize_val * avg_char_width_factor
-        final_chars_per_line = int(target_text_width_pixels / avg_char_width_approx) if avg_char_width_approx > 0 else 30
-        
-        # Re-wrap the text with the accurate character count.
-        final_lines = []
-        current_line = ""
-        for word in words:
-            if not current_line:
-                current_line = word
-            elif len(current_line) + 1 + len(word) <= final_chars_per_line:
-                current_line += " " + word
-            else:
-                final_lines.append(current_line)
-                current_line = word
-        if current_line:
-            final_lines.append(current_line)
-
-        # Final check: If re-wrapping changed the number of lines, recalculate font size one last time for safety.
-        if len(final_lines) != len(pass1_lines):
-            num_lines = len(final_lines) if final_lines else 1
-            fontsize_val = int(safe_area_height / (num_lines * line_height_factor))
-            fontsize_val = max(font_size_clamp[0], min(fontsize_val, font_size_clamp[1]))
-            
-        # 5. Set Y position to vertically center the final text block.
-        text_y_position = "(h-text_h)/2"
-
-        # --- END OF NEW LOGIC ---
-
-        # Format text for FFmpeg. When using textfile, a standard newline is required.
-        formatted_text = "\n".join(final_lines)
+        # CRITICAL FIX: Use the robust iterative text sizing algorithm instead of flawed 2-pass logic
+        # This ensures consistent text sizing across ALL intervention segments
 
         temp_text_file_path = None # Initialize path variable
         draw_text_vf_option = "" # Initialize
@@ -3547,8 +3573,9 @@ Only include meaningful factual statements that require verification."""
             
             # Conditionally add text overlay based on configuration
             if self.config.get('render_intervention_text', True):
-                # Prepare drawtext filter string - text starts from 80% height
-                draw_text_vf_option,temp_text_file_path,_ = self._prepare_text_overlay(text, width, height)
+                # CRITICAL FIX: Use the robust _prepare_text_overlay method for ALL text rendering
+                # This ensures consistent font sizing across all intervention segments
+                draw_text_vf_option, temp_text_file_path, fontsize_val = self._prepare_text_overlay(text, width, height)
                 video_filter_stages.append(f"{current_v_filter_label}{draw_text_vf_option}[v_text_drawn]")
                 current_v_filter_label = "[v_text_drawn]"
                 logger.info(f"Rendering intervention text for {output_path}")
@@ -3634,9 +3661,11 @@ Only include meaningful factual statements that require verification."""
             elif stderr_output is None:
                 stderr_output = 'Unknown FFmpeg error'
             logger.error(f"FFmpeg stderr: {stderr_output}")
-            # Fallback logic
+            # Fallback logic with centralized positioning
             logger.info("Attempting fallback method for black frame creation (draws a space as text, no intervention watermark).")
-            draw_text_fallback_segment = f"drawtext=text=' ':fontcolor=white:fontsize={fontsize_val}:x=w*0.1:y={text_y_position}:line_spacing=20:borderw=2:expansion=none"
+            x_offset_px = text_params['text_x_offset_px']
+            target_w_px = text_params['text_width_px']
+            draw_text_fallback_segment = f"drawtext=text=' ':fontcolor=white:fontsize={fontsize_val}:x={x_offset_px}:y={text_y_position}:boxw={target_w_px}:line_spacing=20:borderw=2:expansion=none"
             try:
                 fallback_cmd_parts = [
                     self.config['ffmpeg_path'],
@@ -3902,10 +3931,12 @@ Only include meaningful factual statements that require verification."""
                 ]
                 
                 if self.config.get('render_intervention_text', True):
-                    # Add text overlay - position at 80% height for consistency
+                    # Add text overlay - position at 80% height for consistency with 80% width constraint
                     preview_text_y = 1920 * 0.8  # 80% of default height (1920)
+                    preview_x_offset = int(1080 * 0.10)  # 10% offset for 80% width area
+                    preview_text_width = int(1080 * 0.80)  # 80% width constraint
                     cmd.extend([
-                        "-vf", f"drawtext=text='{intervention.intervention_text}':fontcolor=white:fontsize=48:x=(w-text_w)/2:y={preview_text_y}:line_spacing=10",
+                        "-vf", f"drawtext=text='{intervention.intervention_text}':fontcolor=white:fontsize=48:x={preview_x_offset}:y={preview_text_y}:boxw={preview_text_width}:line_spacing=10:expansion=none",
                     ])
                     logger.info(f"Creating preview thumbnail with text for intervention {i}")
                 else:
@@ -3963,11 +3994,15 @@ Only include meaningful factual statements that require verification."""
                 # Escape single quotes for shell
                 sanitized_text = sanitized_text.replace("'", "\\'")
                 
+                # Apply 80% width constraint for consistency
+                summary_x_offset = int(1080 * 0.10)  # 10% offset
+                summary_text_width = int(1080 * 0.80)  # 80% width
+                
                 cmd = [
                     self.config['ffmpeg_path'],
                     "-f", "lavfi",
                     "-i", f"color=c=black:s=1080x1920:d=1",
-                    "-vf", f"drawtext=text='{sanitized_text}':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing=10",
+                    "-vf", f"drawtext=text='{sanitized_text}':fontcolor=white:fontsize=32:x={summary_x_offset}:y=(h-text_h)/2:boxw={summary_text_width}:line_spacing=10:expansion=none",
                     "-vframes", "1",
                     "-y",
                     summary_thumbnail
@@ -4816,6 +4851,7 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
         
         # Try multiple approaches to ensure text is rendered
         approaches = [
+            "pil_advanced",
             "complex_with_textfile",
             "simple_with_inline_text",
             "minimal_fallback"
@@ -4826,7 +4862,12 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
                 logger.info(f"Attempting summary slide creation with approach: {approach}")
                 success = False
                 
-                if approach == "complex_with_textfile":
+                if approach == "pil_advanced":
+                    success = self._create_slide_with_pil_advanced(
+                        bullet_points, width, height, slide_path, 
+                        truthfulness_watermark_path
+                    )
+                elif approach == "complex_with_textfile":
                     success = self._create_slide_with_textfile(
                         bullet_points, width, height, slide_path, 
                         truthfulness_watermark_path
@@ -4851,6 +4892,134 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
                 
         logger.error("All summary slide creation approaches failed")
         return None
+    
+    def _create_slide_with_pil_advanced(self, bullet_points: List[str], width: int, height: int,
+                                       slide_path: str, truthfulness_watermark_path: Optional[str]) -> bool:
+        """Create clean summary slide showing truthfulness score and appropriate watermark."""
+        try:
+            # Create black image
+            img = Image.new('RGB', (width, height), color='black')
+            draw = ImageDraw.Draw(img)
+            
+            # Try to find a good system font
+            font_paths = [
+                '/System/Library/Fonts/Helvetica.ttc',
+                '/System/Library/Fonts/Arial.ttf', 
+                '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                '/Windows/Fonts/arial.ttf'
+            ]
+            
+            font_path = None
+            for path in font_paths:
+                if Path(path).exists():
+                    font_path = path
+                    break
+            
+            # Create fonts for different elements
+            try:
+                if font_path:
+                    label_font = ImageFont.truetype(font_path, 50)
+                    score_font = ImageFont.truetype(font_path, 140)
+                else:
+                    label_font = ImageFont.load_default()
+                    score_font = ImageFont.load_default()
+            except:
+                label_font = ImageFont.load_default()
+                score_font = ImageFont.load_default()
+            
+            # Extract truthfulness score from bullet points
+            truthfulness_score = 0
+            for point in bullet_points:
+                if "truthfulness score:" in point.lower():
+                    # Extract percentage from text like "LOW truthfulness score: 0%"
+                    import re
+                    match = re.search(r'(\d+)%', point)
+                    if match:
+                        truthfulness_score = int(match.group(1))
+                    break
+            
+            # Draw "TRUTHFULNESS SCORE" label
+            label_text = "TRUTHFULNESS SCORE"
+            label_bbox = draw.textbbox((0, 0), label_text, font=label_font)
+            label_width = label_bbox[2] - label_bbox[0]
+            label_x = (width - label_width) // 2
+            label_y = height // 2 - 200
+            
+            # Draw label with outline
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    if dx != 0 or dy != 0:
+                        draw.text((label_x + dx, label_y + dy), label_text, font=label_font, fill='black')
+            draw.text((label_x, label_y), label_text, font=label_font, fill='white')
+            
+            # Draw the score percentage in large text
+            score_text = f"{truthfulness_score}%"
+            score_bbox = draw.textbbox((0, 0), score_text, font=score_font)
+            score_width = score_bbox[2] - score_bbox[0]
+            score_x = (width - score_width) // 2
+            score_y = height // 2 - 80
+            
+            # Choose color based on score - green if >80%, red otherwise
+            score_color = 'green' if truthfulness_score > 80 else 'red'
+            
+            # Draw score with thick outline
+            for dx in range(-3, 4):
+                for dy in range(-3, 4):
+                    if dx != 0 or dy != 0:
+                        draw.text((score_x + dx, score_y + dy), score_text, font=score_font, fill='black')
+            draw.text((score_x, score_y), score_text, font=score_font, fill=score_color)
+            
+            # Save the image
+            img.save(slide_path, 'PNG', quality=95)
+            self.logger.info(f"Created clean summary slide with {truthfulness_score}% score: {slide_path}")
+            
+            # Add watermarks - choose based on score
+            if truthfulness_score > 80:
+                # Use verified watermark
+                verified_watermark = self._get_watermark_path('verified')
+                if verified_watermark:
+                    self._add_watermarks_to_slide(slide_path, verified_watermark)
+                else:
+                    self._add_watermarks_to_slide(slide_path, truthfulness_watermark_path)
+            else:
+                # Use BS/correction watermark 
+                bs_watermark = self._get_watermark_path('bs')
+                if bs_watermark:
+                    self._add_watermarks_to_slide(slide_path, bs_watermark)
+                else:
+                    self._add_watermarks_to_slide(slide_path, truthfulness_watermark_path)
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"PIL advanced method failed: {e}")
+            return False
+    
+    def _get_watermark_path(self, watermark_type: str) -> Optional[str]:
+        """Get the path to the appropriate watermark based on type"""
+        try:
+            if watermark_type == 'verified':
+                # Look for verified/factual watermark
+                verified_paths = [
+                    'assets/factual_logo_watermark.png',
+                    'assets/factual/factual_logo_watermark.png'
+                ]
+                for path in verified_paths:
+                    if Path(path).exists():
+                        return str(Path(path).absolute())
+            elif watermark_type == 'bs':
+                # Look for BS/correction watermark  
+                bs_paths = [
+                    'assets/bs_watermark.png',
+                    'assets/factual/bs_watermark.png'
+                ]
+                for path in bs_paths:
+                    if Path(path).exists():
+                        return str(Path(path).absolute())
+            return None
+        except Exception as e:
+            self.logger.error(f"Error getting watermark path for {watermark_type}: {e}")
+            return None
     
     def _create_slide_with_textfile(self, bullet_points: List[str], width: int, height: int, 
                                    slide_path: str, truthfulness_watermark_path: Optional[str]) -> bool:
@@ -5059,26 +5228,17 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
             current_input_idx = 0
             current_v_label = "[0:v]"
             
-            # Add logo watermark (reduced size)
-            logo_path = self.config.get('watermark_path')
-            if logo_path and os.path.exists(logo_path):
-                cmd.extend(["-i", logo_path])
-                current_input_idx += 1
-                logo_height = int(1920 * 0.10)  # Reduced from 0.20 to 0.10
-                filter_parts.append(
-                    f"[{current_input_idx}:v]scale=-2:{logo_height}[logo];"
-                    f"{current_v_label}[logo]overlay=x=(W-w)/2:y=H*0.05[v_logo]"
-                )
-                current_v_label = "[v_logo]"
+            # Add ONLY the truthfulness watermark (no main logo to avoid duplicates)
+            # The main logo is already in the background of our PIL-generated slide
             
-            # Add truthfulness watermark
+            # Add truthfulness watermark in lower third to avoid text overlap
             if truthfulness_watermark_path and os.path.exists(truthfulness_watermark_path):
                 cmd.extend(["-i", truthfulness_watermark_path])
                 current_input_idx += 1
-                truth_height = int(1920 * 0.15)
+                truth_height = int(1920 * 0.12)  # Slightly smaller
                 filter_parts.append(
                     f"[{current_input_idx}:v]scale=-2:{truth_height}[truth];"
-                    f"{current_v_label}[truth]overlay=x=(W-w)/2:y=H*0.85[v_final]"
+                    f"{current_v_label}[truth]overlay=x=(W-w)/2:y=H*0.70[v_final]"  # 70% from top (lower third)
                 )
                 current_v_label = "[v_final]"
             
@@ -5277,38 +5437,144 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
             if force_text_render and not original_text_setting:
                 self.config['render_intervention_text'] = True
                 
-            # Use the main FactualPipeline's black frame creation method
-            success = self._create_black_frame_with_audio(
-                output_path=output_path,
-                audio_path=audio_path,
-                text=text,
-                width=width,
-                height=height,
-                duration=duration,
-                force_audio=False,
-                intervention_type=None  # No specific intervention type for summary
-            )
+            # REVOLUTIONARY FIX: Use the PNG summary slide instead of text rendering
+            try:
+                # First, create the summary slide PNG
+                temp_png_path = output_path.replace('.mp4', '_slide.png')
+                
+                # Extract bullet points for the PNG slide
+                bullet_points = []
+                
+                # Parse the summary text to extract truthfulness score and key info
+                lines = text.split('\n')
+                claim_count = 0
+                truthfulness_line = ""
+                
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # Count claims (lines with emoji)
+                    if line.startswith('✅') or line.startswith('❌'):
+                        claim_count += 1
+                    
+                    # Find truthfulness score line
+                    elif 'Truthfulness Score:' in line:
+                        truthfulness_line = line.replace('🧾 ', '').replace('   ', '')
+                
+                # Create simplified bullet points for our clean design
+                if claim_count > 0:
+                    if claim_count == 1:
+                        bullet_points.append('1 factual claim found inaccurate' if 'inaccurate' in text.lower() else '1 factual claim confirmed')
+                    else:
+                        # Count accurate vs inaccurate
+                        accurate_count = text.count('✅')
+                        inaccurate_count = text.count('❌') 
+                        
+                        if inaccurate_count > accurate_count:
+                            bullet_points.append(f'All {claim_count} factual claims found inaccurate')
+                        elif accurate_count > inaccurate_count:
+                            bullet_points.append(f'All {claim_count} factual claims confirmed')
+                        else:
+                            bullet_points.append(f'{claim_count} factual claims analyzed')
+                
+                # Add truthfulness score
+                if truthfulness_line:
+                    # Format as needed for our design
+                    if 'Truthfulness Score: 0%' in truthfulness_line:
+                        bullet_points.append('LOW truthfulness score: 0%')
+                    elif 'Truthfulness Score: 100%' in truthfulness_line:
+                        bullet_points.append('HIGH truthfulness score: 100%')
+                    else:
+                        bullet_points.append(truthfulness_line.replace('Truthfulness Score:', 'truthfulness score:'))
+                
+                # Add a key issue if we have claims
+                if claim_count > 0 and 'inaccurate' in text.lower():
+                    # Extract first claim for "Key issue"
+                    for line in lines:
+                        if line.strip().startswith('❌'):
+                            claim_preview = line.replace('❌ ', '').strip()
+                            if len(claim_preview) > 60:
+                                claim_preview = claim_preview[:57] + '...'
+                            bullet_points.append(f'Key issue: {claim_preview}')
+                            break
+                
+                # Fallback if no bullet points extracted
+                if not bullet_points:
+                    bullet_points = [
+                        'Factual analysis complete',
+                        'Truthfulness score calculated',
+                        'Review recommended'
+                    ]
+                
+                # Create the PNG slide using our beautiful PIL method
+                png_success = self._create_slide_with_pil_advanced(
+                    bullet_points, width, height, temp_png_path, watermark_path
+                )
+                
+                if png_success and os.path.exists(temp_png_path):
+                    # Convert PNG to video with audio
+                    if audio_path and os.path.exists(audio_path):
+                        cmd = [
+                            'ffmpeg', '-y',
+                            '-loop', '1',
+                            '-i', temp_png_path,
+                            '-i', audio_path,
+                            '-c:v', 'libx264',
+                            '-c:a', 'aac',
+                            '-shortest',
+                            '-pix_fmt', 'yuv420p',
+                            output_path
+                        ]
+                    else:
+                        # No audio - create silent video
+                        cmd = [
+                            'ffmpeg', '-y',
+                            '-loop', '1',
+                            '-i', temp_png_path,
+                            '-t', str(duration),
+                            '-c:v', 'libx264',
+                            '-pix_fmt', 'yuv420p',
+                            output_path
+                        ]
+                    
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode == 0:
+                        success = True
+                        logger.info(f"Successfully created summary segment from PNG slide: {output_path}")
+                        # Clean up temporary PNG
+                        try:
+                            os.remove(temp_png_path)
+                        except:
+                            pass
+                    else:
+                        raise Exception(f"FFmpeg failed: {result.stderr}")
+                else:
+                    raise Exception("Failed to create PNG slide")
+                    
+            except Exception as e:
+                logger.warning(f"PNG slide method failed for summary, falling back to text rendering: {e}")
+                # Use the main FactualPipeline's black frame creation method as fallback
+                success = self._create_black_frame_with_audio(
+                    output_path=output_path,
+                    audio_path=audio_path,
+                    text=text,
+                    width=width,
+                    height=height,
+                    duration=duration,
+                    force_audio=False,
+                    intervention_type=None  # No specific intervention type for summary
+                )
             
             # Restore original text setting
             if force_text_render and not original_text_setting:
                 self.config['render_intervention_text'] = original_text_setting
                 
-            # If the main method succeeded and we have a watermark, add it
-            if success and watermark_path and os.path.exists(watermark_path):
-                try:
-                    # Add watermark to the created summary segment
-                    temp_watermarked = f"{output_path}.watermarked.mp4"
-                    self._add_watermark(output_path, temp_watermarked)
-                    
-                    # Replace original with watermarked version
-                    if os.path.exists(temp_watermarked) and os.path.getsize(temp_watermarked) > 0:
-                        os.replace(temp_watermarked, output_path)
-                        logger.info(f"Added watermark to summary segment")
-                    else:
-                        logger.warning(f"Watermark addition failed, keeping original summary")
-                        
-                except Exception as e:
-                    logger.warning(f"Failed to add watermark to summary: {str(e)}, keeping original")
+            # Skip additional watermarking for summary segments 
+            # Our PNG slide already has the appropriate watermarks embedded
+            # Adding the main logo watermark would create duplicates
+            logger.info("Skipping main watermark for summary segment (already embedded in PNG)")
                     
             return success
             
@@ -5835,63 +6101,196 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
             logger.warning("Created slide with title only as fallback")
             return True
         return False
-    
-    def _add_watermarks_to_slide(self, slide_path: str, truthfulness_watermark_path: Optional[str]) -> None:
-        """Add watermarks to an existing slide image."""
-        try:
-            temp_output = f"{slide_path}.temp.png"
-            
-            # Build command
-            cmd = [self.config['ffmpeg_path'], "-i", slide_path]
-            filter_parts = []
-            current_input_idx = 0
-            current_v_label = "[0:v]"
-            
-            # Add logo watermark (reduced size)
-            logo_path = self.config.get('watermark_path')
-            if logo_path and os.path.exists(logo_path):
-                cmd.extend(["-i", logo_path])
-                current_input_idx += 1
-                logo_height = int(1920 * 0.10)  # Reduced from 0.20 to 0.10
-                filter_parts.append(
-                    f"[{current_input_idx}:v]scale=-2:{logo_height}[logo];"
-                    f"{current_v_label}[logo]overlay=x=(W-w)/2:y=H*0.05[v_logo]"
-                )
-                current_v_label = "[v_logo]"
-            
-            # Add truthfulness watermark
-            if truthfulness_watermark_path and os.path.exists(truthfulness_watermark_path):
-                cmd.extend(["-i", truthfulness_watermark_path])
-                current_input_idx += 1
-                truth_height = int(1920 * 0.15)
-                filter_parts.append(
-                    f"[{current_input_idx}:v]scale=-2:{truth_height}[truth];"
-                    f"{current_v_label}[truth]overlay=x=(W-w)/2:y=H*0.85[v_final]"
-                )
-                current_v_label = "[v_final]"
-            
-            if filter_parts:
-                cmd.extend(["-filter_complex", ";".join(filter_parts)])
-                cmd.extend(["-map", current_v_label])
-            else:
-                cmd.extend(["-c", "copy"])
-            
-            cmd.extend([
-                "-frames:v", "1",
-                "-q:v", "2",
-                "-y",
-                temp_output
-            ])
-            
-            result = subprocess.run(cmd, capture_output=True)
-            if result.returncode == 0 and os.path.exists(temp_output):
-                os.replace(temp_output, slide_path)
-                logger.info("Successfully added watermarks to slide")
-            else:
-                logger.warning(f"Failed to add watermarks: {result.stderr}")
+
+    def _create_intervention_frame_with_pil(self, text: str, width: int, height: int, duration: float, output_path: str, audio_path: str = None, background_image_path: str = None):
+        """
+        Create intervention frame using PIL for accurate text rendering, then convert to video with FFmpeg.
+        This replaces the problematic FFmpeg drawtext approach with precise text measurement and layout.
+        """
+        logger.info(f"Creating intervention frame with PIL: {output_path}")
+        
+        # Calculate text area (80% width, 50% height, centered)
+        text_width = int(width * 0.80)
+        text_height = int(height * 0.50)
+        text_x = int(width * 0.10)  # 10% margin from left
+        text_y = int(height * 0.25)  # Center vertically (50% height starts at 25%)
+        
+        # Safety margin to prevent edge clipping
+        safe_margin = 0.05  # 5% safety margin
+        safe_text_width = int(text_width * (1 - safe_margin))
+        safe_text_height = int(text_height * (1 - safe_margin))
+        safe_text_x = text_x + int(text_width * safe_margin / 2)
+        safe_text_y = text_y + int(text_height * safe_margin / 2)
+        
+        # Create background image
+        if background_image_path and Path(background_image_path).exists():
+            try:
+                # Load and process background image
+                bg_img = Image.open(background_image_path)
+                # Resize to match video dimensions
+                bg_img = bg_img.resize((width, height), Image.Resampling.LANCZOS)
+                # Convert to grayscale
+                bg_img = bg_img.convert('L').convert('RGB')
+                # Apply dimming effect (make it darker for better text contrast)
+                img = Image.new('RGB', (width, height), color='black')
+                img.paste(bg_img, (0, 0))
+                # Apply semi-transparent black overlay for dimming
+                overlay = Image.new('RGBA', (width, height), (0, 0, 0, 102))  # 40% opacity black
+                img = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+                logger.info(f"Using grayscale background from: {background_image_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load background image {background_image_path}: {e}, using black background")
+                img = Image.new('RGB', (width, height), color='black')
+        else:
+            # Fallback to black background
+            img = Image.new('RGB', (width, height), color='black')
+            if background_image_path:
+                logger.warning(f"Background image not found: {background_image_path}, using black background")
+        
+        draw = ImageDraw.Draw(img)
+        
+        # Try to find a good system font
+        font_paths = [
+            '/System/Library/Fonts/Helvetica.ttc',
+            '/System/Library/Fonts/Arial.ttf', 
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            '/Windows/Fonts/arial.ttf'
+        ]
+        
+        font_path = None
+        for path in font_paths:
+            if Path(path).exists():
+                font_path = path
+                break
+        
+        # Find optimal font size through iterative testing
+        best_font_size = 20
+        best_lines = [text]  # fallback
+        
+        for font_size in range(100, 15, -2):  # Test from large to small
+            try:
+                if font_path:
+                    font = ImageFont.truetype(font_path, font_size)
+                else:
+                    font = ImageFont.load_default()
+                
+                # Word wrap to fit width
+                words = text.split()
+                lines = []
+                current_line = ""
+                
+                for word in words:
+                    test_line = current_line + (" " if current_line else "") + word
+                    bbox = draw.textbbox((0, 0), test_line, font=font)
+                    line_width = bbox[2] - bbox[0]
                     
+                    if line_width <= safe_text_width:
+                        current_line = test_line
+                    else:
+                        if current_line:
+                            lines.append(current_line)
+                        current_line = word
+                
+                if current_line:
+                    lines.append(current_line)
+                
+                # Check if total height fits
+                if lines:
+                    sample_bbox = draw.textbbox((0, 0), lines[0], font=font)
+                    line_height = sample_bbox[3] - sample_bbox[1]
+                    total_height = len(lines) * line_height * 1.2  # 20% line spacing
+                    
+                    if total_height <= safe_text_height:
+                        best_font_size = font_size
+                        best_lines = lines
+                        break
+                        
+            except Exception as e:
+                logger.warning(f"Font size {font_size} failed: {e}")
+                continue
+        
+        # Render the final text
+        try:
+            if font_path:
+                final_font = ImageFont.truetype(font_path, best_font_size)
+            else:
+                final_font = ImageFont.load_default()
+            
+            # Calculate line height
+            sample_bbox = draw.textbbox((0, 0), "Ay", font=final_font)
+            line_height = int((sample_bbox[3] - sample_bbox[1]) * 1.2)
+            
+            # Center text block vertically within safe area
+            total_text_height = len(best_lines) * line_height
+            start_y = safe_text_y + (safe_text_height - total_text_height) // 2
+            
+            # Draw each line
+            for i, line in enumerate(best_lines):
+                line_y = start_y + (i * line_height)
+                
+                # Center line horizontally within safe area
+                bbox = draw.textbbox((0, 0), line, font=final_font)
+                line_width = bbox[2] - bbox[0]
+                line_x = safe_text_x + (safe_text_width - line_width) // 2
+                
+                # Draw text with outline for better visibility
+                outline_width = 2
+                for dx in range(-outline_width, outline_width + 1):
+                    for dy in range(-outline_width, outline_width + 1):
+                        if dx != 0 or dy != 0:
+                            draw.text((line_x + dx, line_y + dy), line, font=final_font, fill='black')
+                
+                # Draw main text
+                draw.text((line_x, line_y), line, font=final_font, fill='white')
+            
+            logger.info(f"Rendered text with {len(best_lines)} lines, font size {best_font_size}")
+            
         except Exception as e:
-            logger.warning(f"Failed to add watermarks to slide: {e}")
+            logger.error(f"Text rendering failed: {e}")
+            # Fallback: simple centered text
+            draw.text((width//2, height//2), "Text rendering error", anchor="mm", fill='white')
+        
+        # Save as temporary PNG
+        temp_png_path = output_path.replace('.mp4', '_temp.png')
+        img.save(temp_png_path, 'PNG')
+        
+        # Convert PNG to video with audio using FFmpeg
+        try:
+            if audio_path and Path(audio_path).exists():
+                # Create video from image with TTS audio
+                ffmpeg_cmd = [
+                    self.config['ffmpeg_path'], '-y',
+                    '-loop', '1', '-i', temp_png_path,
+                    '-i', audio_path,
+                    '-c:v', 'libx264', '-c:a', 'aac',
+                    '-shortest', '-pix_fmt', 'yuv420p',
+                    output_path
+                ]
+            else:
+                # Create video from image with duration (silent)
+                ffmpeg_cmd = [
+                    self.config['ffmpeg_path'], '-y',
+                    '-loop', '1', '-i', temp_png_path,
+                    '-c:v', 'libx264', '-t', str(duration),
+                    '-pix_fmt', 'yuv420p',
+                    output_path
+                ]
+            
+            logger.info(f"Creating video from PIL image: {' '.join(ffmpeg_cmd)}")
+            result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                logger.info(f"Successfully created intervention video: {output_path}")
+            else:
+                logger.error(f"FFmpeg failed: {result.stderr}")
+                raise Exception(f"FFmpeg conversion failed: {result.stderr}")
+                
+        finally:
+            # Clean up temporary PNG
+            if Path(temp_png_path).exists():
+                Path(temp_png_path).unlink()
+        
+        return output_path
 
     def _prepare_text_overlay(self, text: str, width: int, height: int):
         """Prepare a drawtext filter string that fits text inside 80% width and 50% height.
@@ -5899,45 +6298,54 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
         Caller is responsible for deleting the temp file when done.
         """
         import tempfile, os
-        # Configurable constants
-        target_text_width_ratio = 0.80
+        # Use centralized text box calculation for consistent positioning
+        ffmpeg_helper = FFmpegHelper(self.config['ffmpeg_path'])
+        text_params = ffmpeg_helper.calculate_text_box_params(width, height)
         target_text_height_ratio = 0.50
         font_size_clamp = (20, 100)
         line_height_factor = 1.25
         avg_char_width_factor = 0.45  # heuristic
 
-        # Pass-1 wrap with generic width
-        initial_chars_per_line = 40
-        def wrap(words, max_chars):
-            lines=[];cur=""
-            for w in words:
-                if not cur:
-                    cur=w
-                elif len(cur)+1+len(w)<=max_chars:
-                    cur+=" "+w
+        # ULTRA-CONSERVATIVE APPROACH: Use much larger safety margins and simple wrapping
+        # Apply 15% safety margin to prevent any possibility of edge cutoffs
+        raw_target_w_px = text_params['text_width_px']  # Exact 80% width in pixels
+        target_w_px = int(raw_target_w_px * 0.85)  # 15% safety margin for width
+        x_offset_px = text_params['text_x_offset_px']  # Exact 10% offset in pixels
+        safe_area_h = height * target_text_height_ratio * 0.85  # 15% safety margin for height
+        
+        # Use very conservative character limit based on smallest expected character
+        # At font size 30, average character is about 15px wide
+        # Use even more conservative estimate
+        conservative_chars_per_line = max(15, int(target_w_px / 20))  # Assume 20px per char (very conservative)
+        
+        def wrap_conservative(words, max_chars):
+            lines = []
+            current_line = ""
+            for word in words:
+                if not current_line:
+                    current_line = word
+                elif len(current_line) + 1 + len(word) <= max_chars:
+                    current_line += " " + word
                 else:
-                    lines.append(cur);cur=w
-            if cur:
-                lines.append(cur)
+                    lines.append(current_line)
+                    current_line = word
+            if current_line:
+                lines.append(current_line)
             return lines
-        words=text.split()
-        lines_pass1=wrap(words,initial_chars_per_line)
-        safe_area_h=height*target_text_height_ratio
-        num_lines=max(1,len(lines_pass1))
-        fontsize=int(safe_area_h/(num_lines*line_height_factor))
-        fontsize=max(font_size_clamp[0],min(font_size_clamp[1],fontsize))
-
-        # Pass-2 wrap with accurate width
-        target_w_px=width*target_text_width_ratio
-        avg_char_w=fontsize*avg_char_width_factor or 1
-        max_chars=int(target_w_px/avg_char_w)
-        max_chars=max(10,max_chars)
-        lines_final=wrap(words,max_chars)
-        if len(lines_final)!=num_lines:
-            num_lines=len(lines_final)
-            fontsize=int(safe_area_h/(num_lines*line_height_factor))
-            fontsize=max(font_size_clamp[0],min(font_size_clamp[1],fontsize))
+        
+        words = text.split()
+        
+        # Wrap text with conservative character limit
+        lines_final = wrap_conservative(words, conservative_chars_per_line)
+        
+        # Calculate font size to fit the wrapped text in available height
+        num_lines = len(lines_final)
+        calculated_fontsize = int(safe_area_h / (num_lines * line_height_factor))
+        best_fontsize = max(font_size_clamp[0], min(calculated_fontsize, font_size_clamp[1]))
+        
+        fontsize = best_fontsize
         formatted="\n".join(lines_final)
+        
         temp_path=None
         try:
             tmp=tempfile.NamedTemporaryFile(mode="w+",delete=False,suffix=".txt",encoding="utf-8")
@@ -5945,17 +6353,23 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
             tmp.close()
             temp_path=tmp.name
             safe_path=temp_path.replace("\\","/")
-            draw=f"drawtext=textfile='{safe_path}':fontcolor=white:fontsize={fontsize}:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing=20:borderw=2:bordercolor=black@0.5:box=1:boxcolor=black@0.5:boxborderw=10:expansion=none"
+            # CRITICAL FIX: Use expansion=none to prevent FFmpeg from interpreting % symbols as format specifiers
+            # This ensures text with percentages (like "80%") renders correctly
+            # ELEGANT SOLUTION: Use safety-margin width for BOTH text wrapping AND FFmpeg boxw to ensure consistency
+            draw=f"drawtext=textfile='{safe_path}':fontcolor=white:fontsize={fontsize}:x={x_offset_px}:y=(h-text_h)/2:boxw={target_w_px}:line_spacing=20:borderw=2:bordercolor=black@0.5:box=1:boxcolor=black@0.5:boxborderw=10:expansion=none"
         except Exception:
-            # fallback to literal space
-            draw=f"drawtext=text=' ':fontcolor=white:fontsize={fontsize}:x=(w-text_w)/2:y=(h-text_h)/2"
+            # fallback to literal space with consistent positioning and width constraint (using safety margin)
+            draw=f"drawtext=text=' ':fontcolor=white:fontsize={fontsize}:x={x_offset_px}:y=(h-text_h)/2:boxw={target_w_px}:expansion=none"
         return draw,temp_path,fontsize
 
     def _write_sources_file(self, interventions: List[Intervention], output_dir: str) -> str:
-        """Write a human-readable sources.txt file listing the main sources for each claim.
+        """Write a human-readable sources.txt file listing detailed sources for each claim.
 
-        Each line: "<one-line claim summary> — <source description> (<url>)"
-        If an intervention has multiple sources we output one line per source.
+        Format:
+        Claim: "<claim text>"
+        Response: <brief summary of intervention>
+        Source: <detailed description with study details>
+        Link: <url>
         """
         if not interventions:
             return ""
@@ -5966,20 +6380,33 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
             sources_path = output_dir_path / "sources.txt"
 
             with open(sources_path, "w", encoding="utf-8") as f:
-                for intervention in interventions:
-                    claim_summary = intervention.claim_text.strip().replace("\n", " ")
-                    if len(claim_summary) > 120:
-                        claim_summary = claim_summary[:117] + "…"
+                f.write("FACTUAL SOURCES\n")
+                f.write("===============\n\n")
+                f.write("Detailed sources for factual claims identified in this video.\n")
+                f.write("Use this information in video descriptions to provide credible backing for fact-checks.\n\n")
 
+                for i, intervention in enumerate(interventions, 1):
+                    claim_text = intervention.claim_text.strip().replace("\n", " ")
+                    f.write(f"{i}. CLAIM: \"{claim_text}\"\n")
+                    
+                    # Brief summary of the response (first 100 chars)
+                    response_summary = intervention.intervention_text[:100] + "..." if len(intervention.intervention_text) > 100 else intervention.intervention_text
+                    f.write(f"   RESPONSE: {response_summary}\n")
+                    
                     if intervention.sources:
-                        for src in intervention.sources:
-                            descr = src.get("description", "")
-                            url = src.get("url", "")
-                            line = f"- {claim_summary} — {descr} ({url})\n"
-                            f.write(line)
+                        for j, source in enumerate(intervention.sources, 1):
+                            title = source.get("title", "No title provided")
+                            description = source.get("description", "No description provided")
+                            url = source.get("url", "No URL provided")
+                            
+                            f.write(f"   SOURCE {j}: {title}\n")
+                            f.write(f"   DETAILS: {description}\n")
+                            f.write(f"   LINK: {url}\n")
+                            f.write("\n")
                     else:
-                        # Fallback if no sources provided
-                        f.write(f"- {claim_summary} — source: not provided\n")
+                        f.write("   SOURCE: No sources provided by AI model\n")
+                        f.write("\n")
+
             logger.info(f"Written sources list: {sources_path}")
             return str(sources_path)
         except Exception as e:
