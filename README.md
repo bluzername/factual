@@ -5,16 +5,18 @@ An automated pipeline that downloads social media videos (Instagram/Facebook), e
 ## 🎯 Overview
 
 Factual automatically:
-1. **Downloads** social media videos from Instagram/Facebook
-2. **Transcribes** audio using OpenAI Whisper
-3. **Extracts** factual claims using GPT-4o
-4. **Generates** fact-checking commentary with sources
-5. **Creates** TTS narration using ElevenLabs
-6. **Produces** enhanced videos with freeze-frame interventions
-7. **Outputs** source citations for credibility
+1. **Discovers** trending factual wellness content using Instagram Graph API
+2. **Downloads** social media videos from Instagram/Facebook
+3. **Transcribes** audio using OpenAI Whisper
+4. **Extracts** factual claims using GPT-4o
+5. **Generates** fact-checking commentary with sources
+6. **Creates** TTS narration using ElevenLabs
+7. **Produces** enhanced videos with freeze-frame interventions
+8. **Outputs** source citations for credibility
 
 ## 🚀 Features
 
+- **Trending Content Discovery**: AI-powered wellness content finder using Instagram Graph API
 - **Multi-platform support**: Instagram and Facebook videos
 - **AI-powered fact-checking**: Uses GPT-4o for claim identification and commentary
 - **Professional TTS**: ElevenLabs integration for natural narration
@@ -22,6 +24,7 @@ Factual automatically:
 - **Source citations**: Automatic generation of credible source lists
 - **Batch processing**: Handle multiple URLs efficiently
 - **Quality outputs**: Summary slides, previews, and manifests
+- **MCP Server Interface**: API access for programmatic integration
 
 ## 📋 Requirements
 
@@ -73,6 +76,21 @@ Factual automatically:
 
 ## 🎬 Usage
 
+### Trending Wellness Content Discovery
+
+**NEW**: Find trending factual wellness reels automatically:
+
+```bash
+cd MVP/factual
+./run_wellness_finder.sh              # Find 20 trending wellness reels
+./run_wellness_finder.sh -n 50 -f csv # Get 50 reels with detailed analysis
+```
+
+This generates a list of trending wellness reel URLs for processing:
+```
+trending_wellness_links.txt
+```
+
 ### Single Video Processing
 
 ```bash
@@ -92,6 +110,14 @@ cd MVP/factual
 2. **Run batch processing**:
    ```bash
    ./run_factual.sh --batch batch_urls.txt
+   ```
+
+3. **Process trending wellness reels**:
+   ```bash
+   # First discover trending content
+   ./run_wellness_finder.sh
+   # Then process the discovered URLs
+   ./run_factual.sh --batch trending_wellness_links.txt
    ```
 
 ### Command Line Options
