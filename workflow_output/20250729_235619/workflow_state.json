@@ -1,0 +1,22 @@
+{
+  "workflow_id": "20250729_235619",
+  "timestamp": "2025-07-30T00:14:06.887786",
+  "tasks": [
+    {
+      "id": "d0decc49-4757-44a0-b862-73da07a8acf4",
+      "source_url": "https://www.instagram.com/reel/DKtSrs3i7Gb/?igsh=ZHh1bDJrOG55ZnB2",
+      "status": "fact_checked",
+      "created_at": "2025-07-29T23:56:19.563209",
+      "updated_at": "2025-07-30T00:14:06.887559",
+      "factual_video_path": "output/20250730001136/factual_output.mp4",
+      "manifest_path": "output/20250730001136/factual_output.json",
+      "summary_slide_path": "output/20250730001136/factual_summary_slide.png",
+      "sources_file": null,
+      "instagram_media_id": null,
+      "instagram_post_url": null,
+      "error_message": null,
+      "retry_count": 0,
+      "max_retries": 3
+    }
+  ]
+}

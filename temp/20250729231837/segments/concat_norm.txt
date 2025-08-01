@@ -1,0 +1,6 @@
+file '/Users/xx/Documents/EB/Projects/Factual/temp/20250729231837/segments/segment_before_0.mp4.norm.mp4'
+file '/Users/xx/Documents/EB/Projects/Factual/temp/20250729231837/segments/black_segment_0.mp4.norm.mp4'
+file '/Users/xx/Documents/EB/Projects/Factual/temp/20250729231837/segments/segment_before_1.mp4.norm.mp4'
+file '/Users/xx/Documents/EB/Projects/Factual/temp/20250729231837/segments/black_segment_1.mp4.norm.mp4'
+file '/Users/xx/Documents/EB/Projects/Factual/temp/20250729231837/segments/final_segment.mp4.norm.mp4'
+file '/Users/xx/Documents/EB/Projects/Factual/temp/20250729231837/segments/summary_segment_2da59483.mp4.norm.mp4'

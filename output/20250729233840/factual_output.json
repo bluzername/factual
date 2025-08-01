@@ -1,0 +1,43 @@
+{
+  "original_video": "temp/20250729233840/reel.mp4",
+  "final_video": "output/20250729233840/factual_output.mp4",
+  "interventions": [
+    {
+      "timestamp_start": 1.0,
+      "timestamp_end": 4.240000009536743,
+      "claim_text": "If you have humans cut back their salt considerably, they become insulin resistant.",
+      "intervention_text": "Claims on salt reduction and insulin resistance are debated. Some studies show a possible link, but it's not conclusive.",
+      "intervention_type": "correction",
+      "target_duration": 3.240000009536743,
+      "audio_file": "temp/20250729233840/tts/intervention_0.mp3",
+      "duration": 6.69,
+      "sources": []
+    },
+    {
+      "timestamp_start": 9.5600004196167,
+      "timestamp_end": 11.199999809265137,
+      "claim_text": "If you measure them a week later ... they will be significantly more insulin resistant.",
+      "intervention_text": "Short-term impacts of salt reduction on insulin resistance have mixed evidence and are not consistently significant.",
+      "intervention_type": "correction",
+      "target_duration": 1.6399993896484375,
+      "audio_file": "temp/20250729233840/tts/intervention_1.mp3",
+      "duration": 6.64,
+      "sources": []
+    },
+    {
+      "timestamp_start": 28.959999084472656,
+      "timestamp_end": 31.239999771118164,
+      "claim_text": "The main contributor to high blood pressure is insulin resistance.",
+      "intervention_text": "High blood pressure can have multiple contributing factors, including genetics, diet, and lifestyle, not solely insulin resistance.",
+      "intervention_type": "correction",
+      "target_duration": 2.280000686645508,
+      "audio_file": "temp/20250729233840/tts/intervention_2.mp3",
+      "duration": 7.29,
+      "sources": []
+    }
+  ],
+  "total_video_duration": 74.533333,
+  "processed_at": "2025-07-29T23:51:04.567242",
+  "source_platform": "instagram",
+  "source_url": "https://www.instagram.com/reel/DJtrKbhz2Mn/?igsh=ZGxpcnVjeWduMjJm"
+}

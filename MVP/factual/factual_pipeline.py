@@ -1426,10 +1426,10 @@ DEFAULT_CONFIG = {
     "min_segment_duration": 3.0,         # Minimum duration in seconds for original segments
     "min_opening_original_duration": 1.0,  # Guarantee at least this many seconds of original footage at the very start
     "merge_short_segments": True,        # Merge interventions if original segment is too short
-    "max_intervention_text_length": 350, # Maximum characters for intervention text (increased for readability)
+    "max_intervention_text_length": 200, # Maximum characters for intervention text (reduced to improve timing)
     "use_ai_text_condensation": True,    # Use OpenAI to intelligently condense long intervention text while preserving meaning
     "enable_tts_speed_adjustment": True, # Enable TTS speed adjustment to match target durations (experimental, may cause API errors)
-    "use_natural_intervention_timing": False, # Use actual TTS duration instead of forcing original segment timing
+    "use_natural_intervention_timing": True, # Use actual TTS duration instead of forcing original segment timing
     "render_intervention_text": True,       # Whether to render text overlays on interventions (false = watermarks only)
     "include_summary_frame": True,          # Whether to include a summary frame at the end showing claims and truthfulness score
     "summary_frame_duration": 8.0,         # Duration of the summary frame in seconds
@@ -2125,9 +2125,9 @@ Only include meaningful factual statements that require verification."""
         os.makedirs(output_dir, exist_ok=True)
 
         MIN_SPEED = 0.7  # Minimum TTS speed
-        MAX_SPEED = 1.5  # Maximum TTS speed (reduced from 2.0 to avoid API errors)
+        MAX_SPEED = 2.5  # Maximum TTS speed (increased to handle longer interventions)
         MIN_TARGET_DURATION = 1.0 # Minimum duration to attempt speed adjustment (increased from 0.1)
-        MAX_SPEED_RATIO = 3.0  # If required speed exceeds this, skip speed adjustment
+        MAX_SPEED_RATIO = 6.0  # Allow higher speed ratios before fallback  # If required speed exceeds this, skip speed adjustment
 
         for idx in to_generate:
             intervention = interventions[idx]
@@ -2278,13 +2278,10 @@ Only include meaningful factual statements that require verification."""
                 intervention.audio_file = final_audio_file_path
                 intervention.duration = final_duration
                 
-                # Ensure the video timeline matches the real audio length
-                # Extend the end timestamp so later cuts stay in-sync
-                try:
-                    intervention.timestamp_end = intervention.timestamp_start + final_duration
-                except Exception:
-                    # In case attributes are missing for some reason, skip the adjustment gracefully.
-                    pass
+                # CRITICAL FIX: DO NOT modify timestamp_end based on TTS duration!
+                # The timestamp_end should remain based on the original claim timing in the source video
+                # The TTS duration only affects the intervention segment length, not the original video timeline
+                # Modifying timestamp_end here causes a cascade of desync issues with subsequent segments
                 
                 logger.info(f"Generated TTS for intervention {idx}, final duration: {final_duration:.2f}s (used speed: {current_speed_to_use:.2f})")
                 if attempt_speed_adjustment:
@@ -2730,9 +2727,27 @@ Only include meaningful factual statements that require verification."""
             # Debug: Extract frame at intervention end point
             self._extract_debug_frame(video_path, debug_frames_dir, f"intervention_{i}_end", intervention.timestamp_end)
             
-            # Update read head for the *next* original segment to start after the current claim ended in original video
-            current_original_video_read_head = intervention.timestamp_end
-            logger.info(f"Next original video segment will resume from: {current_original_video_read_head:.2f}s (after intervention {i}'s claim which ended at {intervention.timestamp_end:.2f}s in original video)")
+            # Update read head for the *next* original segment
+            # If natural intervention timing is enabled, account for TTS duration exceeding original claim duration
+            if self.config.get('use_natural_intervention_timing', False) and intervention.duration:
+                # Calculate how much longer the TTS is compared to the original claim
+                original_claim_duration = intervention.timestamp_end - intervention.timestamp_start
+                if intervention.duration > original_claim_duration:
+                    # TTS is longer, so skip ahead in the original video to maintain sync
+                    overage = intervention.duration - original_claim_duration
+                    current_original_video_read_head = intervention.timestamp_end + overage
+                    logger.info(f"Natural timing mode: TTS duration ({intervention.duration:.2f}s) exceeds original claim ({original_claim_duration:.2f}s). Skipping ahead by {overage:.2f}s to maintain sync.")
+                else:
+                    current_original_video_read_head = intervention.timestamp_end
+                    logger.info(f"Natural timing mode: TTS duration ({intervention.duration:.2f}s) fits within original claim ({original_claim_duration:.2f}s).")
+            else:
+                current_original_video_read_head = intervention.timestamp_end
+                logger.info(f"Standard timing mode: Next segment resumes from original timeline at {current_original_video_read_head:.2f}s")
+            
+            # Cap to video duration
+            if current_original_video_read_head > duration:
+                current_original_video_read_head = duration
+                logger.warning(f"Read head capped to video duration: {duration:.2f}s")
         
         # Add final segment if needed
         if current_original_video_read_head < duration: # duration is total original video duration
@@ -4202,12 +4217,14 @@ Only include meaningful factual statements that require verification."""
         except Exception as cf_err:
             logger.warning(f"Failed to append closing frame: {str(cf_err)}")
 
-        # Step 6.5: Write sources.txt
-        sources_txt_path = ""
+        # Step 6.5: Write sources.html
+        sources_html_path = ""
         try:
-            sources_txt_path = self._write_sources_file(interventions, str(Path(output_path).parent))
+            # Generate dynamic title based on content
+            dynamic_title = f"{len(interventions)} Truths About {self._extract_topic_from_interventions(interventions)}"
+            sources_html_path = self._write_sources_html(interventions, str(Path(output_path).parent), dynamic_title)
         except Exception as e:
-            logger.warning(f"Failed to write sources.txt: {e}")
+            logger.warning(f"Failed to write sources.html: {e}")
 
         return {
             "input_video": video_path,
@@ -4215,7 +4232,7 @@ Only include meaningful factual statements that require verification."""
             "manifest": manifest_path,
             "preview": preview_path,
             "summary_slide": summary_slide_path,
-            "sources_txt": sources_txt_path,
+            "sources_html": sources_html_path,
             "source_platform": platform
         }
         
@@ -6362,55 +6379,384 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
             draw=f"drawtext=text=' ':fontcolor=white:fontsize={fontsize}:x={x_offset_px}:y=(h-text_h)/2:boxw={target_w_px}:expansion=none"
         return draw,temp_path,fontsize
 
-    def _write_sources_file(self, interventions: List[Intervention], output_dir: str) -> str:
-        """Write a human-readable sources.txt file listing detailed sources for each claim.
-
-        Format:
-        Claim: "<claim text>"
-        Response: <brief summary of intervention>
-        Source: <detailed description with study details>
-        Link: <url>
+    def _generate_sources_for_claim(self, claim_text: str, intervention_text: str) -> List[Dict[str, str]]:
+        """Generate sources for a specific claim using web search and AI analysis.
+        
+        Args:
+            claim_text: The original claim text
+            intervention_text: The factual intervention response
+            
+        Returns:
+            List of source dictionaries with title, description, and url
         """
+        try:
+            # Use the exact prompt provided by the user
+            prompt = f"""Given the claim: {claim_text}
+
+Task:
+Search for reputable, peer-reviewed, or institutionally recognized sources that support or substantiate this claim.
+
+If supporting sources are found, provide:
+	•	Link(s) to the original source(s)
+	•	A brief summary of how each source supports the claim
+	•	The type of source (e.g., peer-reviewed journal, government health site, medical institution, etc.)
+
+If no supporting sources are found, state clearly:
+	•	"No reputable sources were found that support this claim."
+
+Prioritize sources such as:
+	•	PubMed / NCBI
+	•	ScienceDirect / Nature / Springer / Wiley / Elsevier
+	•	NIH / CDC / WHO / Mayo Clinic / Cleveland Clinic / NHS
+	•	Academic institutions (.edu domains)
+
+Format your response as a JSON array of source objects. Each object should have:
+- "title": The full title of the study/article/report
+- "description": Detailed description including journal/publication (year), authors/institution, sample size, key finding
+- "url": Direct link to the source
+
+If no sources found, return: [{{"title": "No sources found", "description": "No reputable sources were found that support this claim.", "url": ""}}]"""
+
+            # Make API call to get sources
+            from openai import OpenAI
+            client = OpenAI(api_key=self.config['openai_api_key'])
+            
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a research assistant that finds credible sources for factual claims. Always return valid JSON format."
+                    },
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
+                ],
+                temperature=0.1,
+                max_tokens=1000
+            )
+            
+            # Parse the response with robust JSON extraction
+            response_text = response.choices[0].message.content.strip()
+            
+            # Try multiple JSON parsing strategies
+            import json
+            import re
+            
+            valid_sources = []
+            
+            # Strategy 1: Try to parse the entire response as JSON
+            try:
+                sources_json = json.loads(response_text)
+                if isinstance(sources_json, list):
+                    valid_sources = self._validate_sources(sources_json)
+            except json.JSONDecodeError:
+                pass
+            
+            # Strategy 2: Look for JSON array with improved regex
+            if not valid_sources:
+                try:
+                    # Find JSON array with balanced brackets
+                    json_patterns = [
+                        r'\[\s*\{.*?\}\s*(?:,\s*\{.*?\}\s*)*\]',  # Array of objects
+                        r'\[.*?\]',  # Simple array match (fallback)
+                    ]
+                    
+                    for pattern in json_patterns:
+                        json_match = re.search(pattern, response_text, re.DOTALL)
+                        if json_match:
+                            sources_json = json.loads(json_match.group())
+                            valid_sources = self._validate_sources(sources_json)
+                            if valid_sources:
+                                break
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+            
+            # Strategy 3: Extract individual JSON objects if array parsing fails
+            if not valid_sources:
+                try:
+                    # Look for individual source objects
+                    object_pattern = r'\{[^{}]*"title"[^{}]*\}'
+                    objects = re.findall(object_pattern, response_text, re.DOTALL)
+                    
+                    for obj_str in objects:
+                        try:
+                            source_obj = json.loads(obj_str)
+                            if isinstance(source_obj, dict) and "title" in source_obj:
+                                valid_sources.append({
+                                    "title": source_obj.get("title", ""),
+                                    "description": source_obj.get("description", ""),
+                                    "url": source_obj.get("url", "")
+                                })
+                        except json.JSONDecodeError:
+                            continue
+                except Exception:
+                    pass
+            
+            if valid_sources:
+                self.logger.info(f"Generated {len(valid_sources)} sources for claim: {claim_text[:50]}...")
+                # Verify and fix source links using LLM
+                verified_sources = self._verify_and_fix_source_links(valid_sources, claim_text)
+                return verified_sources
+            
+            # Fallback if all parsing strategies fail
+            self.logger.warning(f"Failed to parse sources JSON for claim: {claim_text[:50]}...")
+            self.logger.debug(f"Raw response was: {response_text}")
+            return [{
+                "title": "Source generation failed", 
+                "description": "Unable to generate sources due to parsing error",
+                "url": ""
+            }]
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to generate sources for claim '{claim_text[:50]}...': {e}")
+            return [{
+                "title": "Source generation error", 
+                "description": f"Error occurred while generating sources: {str(e)}",
+                "url": ""
+            }]
+
+    def _validate_sources(self, sources_json) -> List[Dict[str, str]]:
+        """Validate and clean source objects from JSON response.
+        
+        Args:
+            sources_json: JSON data containing source objects
+            
+        Returns:
+            List of validated source dictionaries
+        """
+        valid_sources = []
+        
+        if not isinstance(sources_json, list):
+            return valid_sources
+            
+        for source in sources_json:
+            if isinstance(source, dict) and "title" in source:
+                # Clean and validate each field
+                title = str(source.get("title", "")).strip()
+                description = str(source.get("description", "")).strip()
+                url = str(source.get("url", "")).strip()
+                
+                # Skip sources with empty titles or obvious placeholder content
+                if (title and 
+                    title.lower() not in ["no sources found", "source generation failed"] and
+                    len(title) > 5):
+                    
+                    valid_sources.append({
+                        "title": title,
+                        "description": description,
+                        "url": url
+                    })
+        
+        return valid_sources
+
+    def _verify_and_fix_source_links(self, sources: List[Dict[str, str]], claim_text: str) -> List[Dict[str, str]]:
+        """Verify source links using LLM and fix any that are invalid or incorrect."""
+        if not sources:
+            return sources
+        
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=self.config['openai_api_key'])
+            
+            # Create a verification prompt
+            sources_text = ""
+            for i, source in enumerate(sources, 1):
+                sources_text += f"{i}. Title: {source.get('title', 'N/A')}\n"
+                sources_text += f"   Description: {source.get('description', 'N/A')}\n"
+                sources_text += f"   URL: {source.get('url', 'N/A')}\n\n"
+            
+            prompt = f"""For the claim: "{claim_text}"
+
+I have these sources but need to verify the URLs are correct and lead to the actual sources:
+
+{sources_text}
+
+Please:
+1. Check if each URL appears to be correctly formatted and likely to work
+2. If any URL looks suspicious, incorrect, or incomplete, suggest a corrected URL that would likely lead to the actual source
+3. For academic papers, prioritize PubMed, DOI links, or direct journal links
+4. For health organizations, use their official domains (nih.gov, cdc.gov, who.int, etc.)
+
+Return the sources in the same JSON format, but with corrected URLs where needed. If a source cannot be verified or corrected, mark its URL as empty string.
+
+Format as JSON array:
+[{{"title": "...", "description": "...", "url": "..."}}]"""
+
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a fact-checking assistant that verifies and corrects source URLs. Always return valid JSON."
+                    },
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
+                ],
+                temperature=0.1,
+                max_tokens=1500
+            )
+            
+            # Parse the verified sources
+            response_text = response.choices[0].message.content.strip()
+            
+            # Try to extract JSON
+            import json
+            import re
+            
+            try:
+                # Try direct JSON parsing first
+                verified_sources = json.loads(response_text)
+                if isinstance(verified_sources, list):
+                    validated = self._validate_sources(verified_sources)
+                    if validated:
+                        self.logger.info(f"Successfully verified and corrected {len(validated)} source links")
+                        return validated
+            except json.JSONDecodeError:
+                pass
+            
+            # Fallback: try to find JSON array in response
+            try:
+                json_match = re.search(r'\[\s*\{.*?\}\s*(?:,\s*\{.*?\}\s*)*\]', response_text, re.DOTALL)
+                if json_match:
+                    verified_sources = json.loads(json_match.group())
+                    validated = self._validate_sources(verified_sources)
+                    if validated:
+                        self.logger.info(f"Successfully verified and corrected {len(validated)} source links")
+                        return validated
+            except (json.JSONDecodeError, AttributeError):
+                pass
+            
+            # If verification fails, return original sources
+            self.logger.warning("Link verification failed, returning original sources")
+            return sources
+            
+        except Exception as e:
+            self.logger.warning(f"Error during link verification: {e}. Returning original sources")
+            return sources
+
+    def _extract_topic_from_interventions(self, interventions: List[Intervention]) -> str:
+        """Extract the main topic from interventions for dynamic title generation."""
+        if not interventions:
+            return "This Topic"
+        
+        # Look for common keywords in claims to determine the topic
+        all_claims = " ".join([intervention.claim_text for intervention in interventions]).lower()
+        
+        # Define topic keywords
+        topic_keywords = {
+            "protein": "Protein",
+            "whey": "Whey Protein", 
+            "nutrition": "Nutrition",
+            "diet": "Diet",
+            "fitness": "Fitness",
+            "health": "Health",
+            "exercise": "Exercise",
+            "supplement": "Supplements",
+            "vitamin": "Vitamins",
+            "food": "Food"
+        }
+        
+        # Find the most relevant topic
+        for keyword, topic in topic_keywords.items():
+            if keyword in all_claims:
+                return topic
+        
+        # Fallback to generic title
+        return "This Topic"
+
+    def _write_sources_html(self, interventions: List[Intervention], output_dir: str, title: str) -> str:
+        """Write a human-readable sources.html file listing detailed sources for each claim."""
         if not interventions:
             return ""
 
         try:
             output_dir_path = Path(output_dir)
             output_dir_path.mkdir(parents=True, exist_ok=True)
-            sources_path = output_dir_path / "sources.txt"
+            sources_path = output_dir_path / "sources.html"
 
             with open(sources_path, "w", encoding="utf-8") as f:
-                f.write("FACTUAL SOURCES\n")
-                f.write("===============\n\n")
-                f.write("Detailed sources for factual claims identified in this video.\n")
-                f.write("Use this information in video descriptions to provide credible backing for fact-checks.\n\n")
+                f.write("<!DOCTYPE html>\n")
+                f.write("<html lang='en'>\n")
+                f.write("<head>\n")
+                f.write("    <meta charset='UTF-8'>\n")
+                f.write("    <meta name='viewport' content='width=device-width, initial-scale=1.0'>\n")
+                f.write("    <title>Sources</title>\n")
+                f.write("    <style>\n")
+                f.write("        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; padding: 20px; max-width: 800px; margin: auto; color: #333; white-space: pre-line; }\n")
+                f.write("        .content { white-space: pre-line; }\n")
+                f.write("        a { color: #0066cc; text-decoration: none; }\n")
+                f.write("        a:hover { text-decoration: underline; }\n")
+                f.write("    </style>\n")
+                f.write("</head>\n")
+                f.write("<body>\n")
+                f.write("    <div class='content'>\n")
+                
+                f.write(f"🎯 {title}\n\n")
+                f.write("⸻\n\n")
 
                 for i, intervention in enumerate(interventions, 1):
-                    claim_text = intervention.claim_text.strip().replace("\n", " ")
-                    f.write(f"{i}. CLAIM: \"{claim_text}\"\n")
+                    claim_text = intervention.claim_text.strip().replace('\n', ' ')
                     
-                    # Brief summary of the response (first 100 chars)
-                    response_summary = intervention.intervention_text[:100] + "..." if len(intervention.intervention_text) > 100 else intervention.intervention_text
-                    f.write(f"   RESPONSE: {response_summary}\n")
+                    f.write(f"{i}️⃣ CLAIM: \"{claim_text}\"\n")
                     
-                    if intervention.sources:
-                        for j, source in enumerate(intervention.sources, 1):
-                            title = source.get("title", "No title provided")
-                            description = source.get("description", "No description provided")
-                            url = source.get("url", "No URL provided")
-                            
-                            f.write(f"   SOURCE {j}: {title}\n")
-                            f.write(f"   DETAILS: {description}\n")
-                            f.write(f"   LINK: {url}\n")
+                    veracity_emoji = "✅" if intervention.intervention_type == "confirmation" else "❌"
+                    
+                    # More nuanced veracity text based on intervention type
+                    if intervention.intervention_type == "confirmation":
+                        veracity_text = "True"
+                    elif intervention.intervention_type == "clarification":
+                        veracity_text = "Surprising but true" if "surprising" in intervention.intervention_text.lower() else "Needs context"
+                    else: # correction
+                        veracity_text = "Misleading"
+                    
+                    response_summary = intervention.intervention_text
+                    f.write(f"{veracity_emoji} {veracity_text}. {response_summary}\n")
+                    
+                    sources_to_use = intervention.sources
+                    if not sources_to_use:
+                        self.logger.info(f"No sources provided by AI model for claim {i}, generating sources...")
+                        sources_to_use = self._generate_sources_for_claim(intervention.claim_text, intervention.intervention_text)
+                    
+                    if sources_to_use:
+                        f.write("📚 Sources:\n")
+                        for source in sources_to_use:
+                            source_title = source.get("title", "No title provided")
+                            # Extract publication info if available
+                            description = source.get("description", "")
+                            if "journal" in description.lower() or "study" in description.lower():
+                                f.write(f"– {source_title}\n")
+                            else:
+                                f.write(f"– {source_title}\n")
+                        
+                        # Add links with emoji prefix
+                        link_count = 0
+                        for source in sources_to_use:
+                            url = source.get("url", "")
+                            if url:
+                                f.write(f"🔗 <a href='{url}' target='_blank'>{url}</a> ")
+                                link_count += 1
+                        if link_count > 0:
                             f.write("\n")
                     else:
-                        f.write("   SOURCE: No sources provided by AI model\n")
-                        f.write("\n")
+                        f.write("📉 No peer-reviewed sources confirm this claim.\n")
+                    
+                    f.write("\n⸻\n\n")
+
+                f.write("🧠 Want more science-backed food facts?\n")
+                f.write("👉 Follow & save this post\n")
+
+                f.write("    </div>\n")
+                f.write("</body>\n")
+                f.write("</html>\n")
 
             logger.info(f"Written sources list: {sources_path}")
             return str(sources_path)
         except Exception as e:
-            logger.warning(f"Failed to write sources.txt: {e}")
+            logger.warning(f"Failed to write sources.html: {e}")
             return ""
 
 

@@ -1,0 +1,38 @@
+{
+  "workflow_id": "20250729_231820",
+  "timestamp": "2025-07-29T23:20:53.365072",
+  "tasks": [
+    {
+      "id": "8cf68703-a7f4-4b01-ada4-4e196062ffe4",
+      "source_url": "https://www.instagram.com/reel/DKtSrs3i7Gb/?igsh=ZHh1bDJrOG55ZnB2",
+      "status": "fact_checked",
+      "created_at": "2025-07-29T23:18:20.907936",
+      "updated_at": "2025-07-29T23:20:53.364753",
+      "factual_video_path": "output/20250729231837/factual_output.mp4",
+      "manifest_path": "output/20250729231837/factual_output.json",
+      "summary_slide_path": "output/20250729231837/factual_summary_slide.png",
+      "sources_file": null,
+      "instagram_media_id": null,
+      "instagram_post_url": null,
+      "error_message": null,
+      "retry_count": 0,
+      "max_retries": 3
+    },
+    {
+      "id": "45813d7a-85b2-43b2-ab9e-9a8664ef0640",
+      "source_url": "https://www.instagram.com/reel/DE_C78HyOVM/?igsh=MWh5dTU4NzltM296Zw==",
+      "status": "fact_checked",
+      "created_at": "2025-07-29T23:18:20.907994",
+      "updated_at": "2025-07-29T23:20:29.987086",
+      "factual_video_path": "output/20250729231837/factual_output.mp4",
+      "manifest_path": "output/20250729231837/factual_output.json",
+      "summary_slide_path": "output/20250729231837/factual_summary_slide.png",
+      "sources_file": null,
+      "instagram_media_id": null,
+      "instagram_post_url": null,
+      "error_message": null,
+      "retry_count": 0,
+      "max_retries": 3
+    }
+  ]
+}

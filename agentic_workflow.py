@@ -97,8 +97,9 @@ class ReelProcessingTask:
 @dataclass
 class WorkflowConfig:
     """Configuration for the agentic workflow."""
-    # Factual Pipeline Config
+    # Factual Pipeline Config - can be a path or embedded config
     factual_config_path: Optional[str] = None
+    factual_config: Optional[Dict[str, Any]] = None
     
     # Instagram API Configuration
     instagram_access_token: str = ""
@@ -129,7 +130,18 @@ class WorkflowConfig:
         """Load configuration from JSON file."""
         with open(config_path, 'r') as f:
             config_data = json.load(f)
-        return cls(**config_data)
+        
+        # Check if this is a factual pipeline config or workflow config
+        factual_keys = {'openai_api_key', 'elevenlabs_api_key', 'whisper_model', 'watermark_path', 'ffmpeg_path', 'yt_dlp_path'}
+        workflow_keys = {'factual_config_path', 'instagram_access_token', 'max_concurrent_tasks', 'enable_auto_posting'}
+        
+        if any(key in config_data for key in factual_keys) and not any(key in config_data for key in workflow_keys):
+            # This is a factual pipeline config file, use it as embedded config
+            logger.info("Detected factual pipeline config, using as embedded configuration")
+            return cls(factual_config=config_data)
+        else:
+            # This is a workflow config file
+            return cls(**config_data)
     
     def save_to_file(self, config_path: str):
         """Save configuration to JSON file."""
@@ -305,22 +317,52 @@ class InstagramPublisher:
 class AgenticWorkflow:
     """Main agentic workflow orchestrator."""
     
-    def __init__(self, config: WorkflowConfig):
+    def __init__(self, config: WorkflowConfig, workflow_id: Optional[str] = None):
         """Initialize the workflow with configuration.
         
         Args:
             config: Workflow configuration
+            workflow_id: Optional specific workflow ID to resume, or None to auto-detect/create
         """
         self.config = config
         self.tasks: List[ReelProcessingTask] = []
-        self.workflow_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Handle workflow ID - either provided, auto-detect latest, or create new
+        if workflow_id:
+            self.workflow_id = workflow_id
+        else:
+            # Try to find the most recent workflow to resume
+            existing_workflow = self._find_latest_workflow()
+            if existing_workflow:
+                self.workflow_id = existing_workflow
+                logger.info(f"Resuming existing workflow: {self.workflow_id}")
+            else:
+                self.workflow_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+                logger.info(f"Creating new workflow: {self.workflow_id}")
         
         # Create output directory
         self.output_dir = Path(config.workflow_output_dir) / self.workflow_id
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize components
-        self.factual_pipeline = FactualPipeline(config.factual_config_path)
+        # Initialize factual pipeline with proper config handling
+        if config.factual_config:
+            # Create a temporary config file for the embedded config
+            temp_config_dir = Path(tempfile.gettempdir()) / "factual_workflow"
+            temp_config_dir.mkdir(exist_ok=True)
+            temp_config_path = temp_config_dir / f"factual_config_{self.workflow_id}.json"
+            
+            with open(temp_config_path, 'w') as f:
+                json.dump(config.factual_config, f, indent=2)
+            
+            self.factual_pipeline = FactualPipeline(str(temp_config_path))
+            self.temp_config_path = temp_config_path  # Keep reference for cleanup
+        elif config.factual_config_path:
+            self.factual_pipeline = FactualPipeline(config.factual_config_path)
+            self.temp_config_path = None
+        else:
+            # Use default config
+            self.factual_pipeline = FactualPipeline()
+            self.temp_config_path = None
         
         # Initialize file uploader if configured
         self.file_uploader = None
@@ -346,6 +388,47 @@ class AgenticWorkflow:
         self.load_state()
         
         logger.info(f"Initialized agentic workflow {self.workflow_id}")
+    
+    def _find_latest_workflow(self) -> Optional[str]:
+        """Find the most recent workflow that has pending tasks.
+        
+        Returns:
+            Workflow ID of the latest workflow with pending tasks, or None
+        """
+        workflow_base_dir = Path(self.config.workflow_output_dir)
+        if not workflow_base_dir.exists():
+            return None
+        
+        # Get all workflow directories sorted by creation time (newest first)
+        workflow_dirs = []
+        for item in workflow_base_dir.iterdir():
+            if item.is_dir() and item.name.replace('_', '').isdigit():
+                workflow_dirs.append(item.name)
+        
+        workflow_dirs.sort(reverse=True)
+        
+        # Check each workflow for pending tasks
+        for workflow_id in workflow_dirs:
+            state_file = workflow_base_dir / workflow_id / "workflow_state.json"
+            if state_file.exists():
+                try:
+                    with open(state_file, 'r') as f:
+                        state_data = json.load(f)
+                    
+                    # Check if there are pending tasks
+                    pending_tasks = [
+                        task for task in state_data.get('tasks', [])
+                        if task.get('status') == 'pending'
+                    ]
+                    
+                    if pending_tasks:
+                        logger.info(f"Found workflow {workflow_id} with {len(pending_tasks)} pending tasks")
+                        return workflow_id
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to read state file for workflow {workflow_id}: {e}")
+        
+        return None
     
     def load_state(self):
         """Load workflow state from disk if it exists."""
@@ -655,6 +738,15 @@ class AgenticWorkflow:
         
         return "\n".join(caption_parts)
     
+    def cleanup(self):
+        """Clean up temporary files and resources."""
+        if hasattr(self, 'temp_config_path') and self.temp_config_path and self.temp_config_path.exists():
+            try:
+                self.temp_config_path.unlink()
+                logger.info(f"Cleaned up temporary config file: {self.temp_config_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary config file: {e}")
+    
     def _generate_summary(self) -> Dict[str, Any]:
         """Generate workflow execution summary.
         
@@ -688,6 +780,9 @@ class AgenticWorkflow:
         summary_file = self.output_dir / "workflow_summary.json"
         with open(summary_file, 'w') as f:
             json.dump(summary, f, indent=2)
+        
+        # Clean up temporary files
+        self.cleanup()
         
         return summary
     
