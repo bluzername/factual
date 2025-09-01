@@ -91,7 +91,7 @@ class OpenAIClient:
             raise APIClientError(f"Failed to transcribe audio: {str(e)}")
             
     def extract_claims(self, transcript_text: str) -> List[Dict[str, Any]]:
-        """Extract factual claims and generate commentary using GPT-4o.
+        """Extract factual claims and generate commentary using GPT5-nano.
         
         Args:
             transcript_text: Full transcript text
@@ -99,7 +99,7 @@ class OpenAIClient:
         Returns:
             List of intervention objects with commentary
         """
-        logger.info("Extracting factual claims using GPT-4o")
+        logger.info("Extracting factual claims using GPT5-nano")
         
         system_prompt = """You are a fact-checking assistant that identifies factual claims in video transcripts 
 and provides accurate and neutral commentary. For each factual claim you identify, determine if it is accurate or inaccurate
@@ -148,7 +148,7 @@ Only include meaningful factual statements that require verification."""
         
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o",
+                model=self.config.get("llm_model", "gpt-5-nano"),
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -181,7 +181,7 @@ Only include meaningful factual statements that require verification."""
             return interventions_data
             
         except Exception as e:
-            logger.error(f"GPT-4o claim extraction failed: {str(e)}")
+            logger.error(f"LLM claim extraction failed: {str(e)}")
             raise APIClientError(f"Failed to extract claims: {str(e)}")
 
 class ElevenLabsClient:
@@ -1410,7 +1410,20 @@ DEFAULT_CONFIG = {
     "openai_api_key": "",
     "elevenlabs_api_key": "",
     "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",  # Default voice
-                "whisper_model": "whisper-1",
+    "whisper_model": "whisper-1",
+    # ASR Backend Configuration
+    "asr_backend": "auto",             # 'auto', 'parakeet', 'faster_whisper', 'openai'
+    "parakeet_device": "auto",         # 'auto', 'cuda', 'cpu'
+    "parakeet_batch_size": 1,
+    "parakeet_timestamps": True,
+    # Legacy ASR options (for backward compatibility)
+    "transcription_backend": "local",  # 'local' or 'api' (legacy)
+    "local_whisper_model": "small",    # faster-whisper model size
+    "local_whisper_compute": "int8",   # faster-whisper compute type
+    "whisper_device": "auto",
+    # LLM models
+    "llm_model": "gpt-5-nano",         # Primary LLM for claim extraction, sources, verification
+    "llm_mini_model": "gpt-5-nano",    # Lightweight LLM for condensation or cheaper ops
     "watermark_path": "assets/logo_watermark.png",
     "output_dir": "output",
     "temp_dir": "temp",
@@ -1422,7 +1435,7 @@ DEFAULT_CONFIG = {
     "verified_watermark_path": "assets/verified_watermark.png",
     "bs_watermark_path": "assets/bs_watermark.png",
     # Intervention limits and timing
-    "max_interventions": 4,              # Maximum number of interventions to include
+    "max_interventions": 3,              # Maximum number of interventions to include (capped to 3)
     "min_segment_duration": 3.0,         # Minimum duration in seconds for original segments
     "min_opening_original_duration": 1.0,  # Guarantee at least this many seconds of original footage at the very start
     "merge_short_segments": True,        # Merge interventions if original segment is too short
@@ -1438,6 +1451,25 @@ DEFAULT_CONFIG = {
     "generate_summary_slide": True,        # Generate a separate PNG summary slide for manual addition
     "summary_slide_width": 1080,           # Width of the summary slide (Instagram standard)
     "summary_slide_height": 1920,          # Height of the summary slide (Instagram story format)
+    # Transcription
+    "transcription_backend": "local",     # 'local' (default) or 'api'
+    # Duration and audio quality gates
+    "max_video_duration_seconds": 60,      # Hard cap: skip videos longer than 60s
+    "skip_videos_without_audio": True,     # Skip videos with no audio track
+    "audio_mean_volume_db_threshold": -50.0, # Skip if mean volume below this (dB)
+    # Engagement features
+    "enable_hook": True,                   # Prepend a short cold-open hook segment
+    "hook_duration_seconds": 1.2,          # Hook duration
+    "enable_progress_bar": True,           # Draw a dynamic progress bar on the final output
+    "progress_bar_height_px": 12,          # Height of the progress bar
+    "progress_bar_margin_ratio": 0.94,     # Vertical position as a fraction of height (0.0-1.0)
+    "progress_bar_width_ratio": 0.90,      # Width relative to video width
+    "progress_bar_bg_alpha": 0.15,         # Background bar alpha (0-1)
+    "progress_bar_fg_color": "#00E5FF",   # Foreground progress color
+    "enable_cta_end_card": True,           # Append a CTA end-card after the video
+    "cta_text": "Follow for more fact checks", # CTA headline text
+    "cta_duration_seconds": 2.0,           # Duration of CTA end card
+    "enable_auto_cover_thumbnail": True,   # Export an auto cover thumbnail from the start (hook)
     # Sentence-aware cutting
     "enable_sentence_aware_cuts": True,
     "sentence_cut_max_lookbehind": 3.0,  # Seconds
@@ -1738,7 +1770,9 @@ class FactualPipeline:
             raise RuntimeError(f"Failed to download {platform} content: {error_msg}")
     
     def transcribe_audio(self, video_path: str) -> List[Dict[str, Any]]:
-        """Transcribe the audio from a video using OpenAI Whisper.
+        """Transcribe the audio from a video.
+        Uses NVIDIA Parakeet TDT 0.6B v2 by default for superior local transcription.
+        Falls back to faster-whisper or OpenAI API as needed.
         
         Args:
             video_path: Path to the video file
@@ -1747,11 +1781,6 @@ class FactualPipeline:
             List of transcription segments with timestamps
         """
         logger.info(f"Transcribing audio from: {video_path}")
-        
-        import openai
-        from openai import OpenAI
-
-        client = OpenAI(api_key=self.config['openai_api_key'])
         
         # Extract audio from video
         audio_path = Path(video_path).with_suffix('.wav')
@@ -1768,57 +1797,120 @@ class FactualPipeline:
         ]
         
         subprocess.run(extract_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        # Transcribe using Whisper
+
         try:
-            with open(audio_path, "rb") as audio_file:
-                transcription = client.audio.transcriptions.create(
-                    model=self.config['whisper_model'],
-                    file=audio_file,
-                    response_format="verbose_json"
-                )
+            # Use the new ASR manager for transcription
+            try:
+                from .asr_backends import ASRManager
+            except ImportError:
+                # Handle relative import when running as script
+                from asr_backends import ASRManager
             
-            logger.info(f"Transcription completed, {len(transcription.segments)} segments found")
+            asr_manager = ASRManager(self.config)
             
-            # Save the transcript for debugging
-            transcript_path = Path(audio_path).with_suffix('.json')
+            # Get preferred backend from config
+            preferred_backend = self.config.get('asr_backend', 'auto')  # 'auto', 'parakeet', 'faster_whisper', 'openai'
+            
+            logger.info(f"Available ASR backends: {asr_manager.get_available_backends()}")
+            
+            # Transcribe using the manager
+            segments = asr_manager.transcribe(str(audio_path), backend=preferred_backend)
+            
+            logger.info(f"Transcription complete: {len(segments)} segments found")
+
+        except Exception as e:
+            logger.error(f"ASR transcription failed: {str(e)}")
+            # Fall back to legacy method as last resort
+            logger.warning("Falling back to legacy transcription method")
+            segments = self._legacy_transcribe_audio(str(audio_path))
+
+        # Save the transcript for debugging
+        transcript_path = Path(audio_path).with_suffix('.json')
+        try:
             with open(transcript_path, 'w') as f:
-                json.dump(transcription.model_dump(), f, indent=2)
-            
-            # Convert segments to a list of dictionaries
-            segments = []
-            for segment_data in transcription.segments:
-                segment_dict = {
-                    'text': segment_data.text,
-                    'start': segment_data.start,
-                    'end': segment_data.end,
-                    'words': [] # Initialize words list
-                }
-                if hasattr(segment_data, 'words') and segment_data.words:
-                    segment_dict['words'] = [
-                        {'text': w.word, 'start': w.start, 'end': w.end}
-                        for w in segment_data.words
-                    ]
-                segments.append(segment_dict)
-            
-            logger.info(f"Processed {len(segments)} segments into dictionaries, including word-level timestamps if available.")
-            
-            # Store the detailed transcript for later use (e.g., sentence-aware cutting)
-            self.full_transcript_with_words = segments
-            
+                json.dump({'segments': segments}, f, indent=2)
+        except Exception:
+            pass
+
+        # Store for later sentence-aware cutting
+        self.full_transcript_with_words = segments
+        return segments
+    
+    def _legacy_transcribe_audio(self, audio_path: str) -> List[Dict[str, Any]]:
+        """Legacy transcription method using faster-whisper or OpenAI API"""
+        
+        backend = self.config.get('transcription_backend', 'local')
+
+        try:
+            if backend == 'local':
+                # Local transcription with faster-whisper
+                try:
+                    from faster_whisper import WhisperModel
+                except ImportError as ie:
+                    logger.warning(f"faster-whisper not installed ({ie}), falling back to API transcription")
+                    backend = 'api'
+
+            segments: List[Dict[str, Any]] = []
+            if backend == 'local':
+                # Load model (use a small efficient default)
+                model_size = self.config.get('local_whisper_model', 'small')
+                compute_type = self.config.get('local_whisper_compute', 'int8')
+                model = WhisperModel(model_size, compute_type=compute_type)
+                
+                # Transcribe with word timestamps
+                logger.info(f"Running legacy local transcription with faster-whisper ({model_size}, {compute_type})")
+                result, info = model.transcribe(str(audio_path), beam_size=1, vad_filter=True, word_timestamps=True)
+                for seg in result:
+                    seg_dict = {
+                        'text': seg.text.strip(),
+                        'start': float(seg.start),
+                        'end': float(seg.end),
+                        'words': [
+                            {'text': w.word, 'start': float(w.start), 'end': float(w.end)}
+                            for w in (seg.words or [])
+                        ]
+                    }
+                    segments.append(seg_dict)
+                logger.info(f"Legacy local transcription completed, {len(segments)} segments found")
+            else:
+                # API transcription path (OpenAI Whisper)
+                from openai import OpenAI
+                client = OpenAI(api_key=self.config['openai_api_key'])
+                with open(audio_path, "rb") as audio_file:
+                    transcription = client.audio.transcriptions.create(
+                        model=self.config['whisper_model'],
+                        file=audio_file,
+                        response_format="verbose_json"
+                    )
+                logger.info(f"Legacy API transcription completed, {len(transcription.segments)} segments found")
+                for segment_data in transcription.segments:
+                    segment_dict = {
+                        'text': segment_data.text,
+                        'start': segment_data.start,
+                        'end': segment_data.end,
+                        'words': []
+                    }
+                    if hasattr(segment_data, 'words') and segment_data.words:
+                        segment_dict['words'] = [
+                            {'text': w.word, 'start': w.start, 'end': w.end}
+                            for w in segment_data.words
+                        ]
+                    segments.append(segment_dict)
+
             return segments
-            
         except Exception as e:
             logger.error(f"Transcription failed: {str(e)}")
             raise
         finally:
-            # Clean up the extracted audio
             if os.path.exists(audio_path):
-                os.remove(audio_path)
+                try:
+                    os.remove(audio_path)
+                except Exception:
+                    pass
     
     def extract_claims_and_generate_commentary(self, 
                                              transcript: List[Dict[str, Any]]) -> List[Intervention]:
-        """Extract factual claims and generate commentary using GPT-4o.
+        """Extract factual claims and generate commentary using GPT5-nano.
         
         Args:
             transcript: List of transcription segments with timestamps
@@ -1826,7 +1918,7 @@ class FactualPipeline:
         Returns:
             List of interventions with commentary
         """
-        logger.info("Extracting factual claims and generating commentary")
+        logger.info("Extracting factual claims and generating commentary with GPT5-nano")
         
         import openai
         from openai import OpenAI
@@ -1888,7 +1980,7 @@ class FactualPipeline:
         # Get the character limit from config for the prompt
         max_text_length = self.config.get('max_intervention_text_length', 250)
         
-        # Prompt for GPT-4o to identify factual claims and generate commentary
+        # Prompt for GPT5-nano to identify factual claims and generate commentary
         system_prompt = f"""You are a fact-checking assistant that identifies factual claims in video transcripts 
 and provides accurate and neutral commentary. For each factual claim you identify, determine if it is accurate or inaccurate
 based on your knowledge (up to your training cutoff date).
@@ -1944,7 +2036,7 @@ Only include meaningful factual statements that require verification."""
         
         try:
             response = client.chat.completions.create(
-                model="gpt-4o",
+                model=self.config.get("llm_model", "gpt-5-nano"),
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -1954,34 +2046,34 @@ Only include meaningful factual statements that require verification."""
             
             # Parse the response JSON
             content = response.choices[0].message.content
-            logger.info(f"GPT-4o raw response: {content[:100]}...")  # Log the first 100 chars for debugging
+            logger.info(f"LLM raw response: {content[:100]}...")  # Log the first 100 chars for debugging
             result = json.loads(content)
             
             # For debugging
-            logger.info(f"GPT-4o response structure: {list(result.keys())}")
+            logger.info(f"LLM response structure: {list(result.keys())}")
             
-            # Extract interventions from various possible response formats
+            # Enforce minimal JSON schema: array under 'interventions' with required keys
             interventions_data = []
-            if "interventions" in result:
-                interventions_data = result["interventions"]
-                logger.info(f"Found interventions array with {len(interventions_data)} items")
-            elif "claim_text" in result and "intervention_text" in result and "intervention_type" in result:
-                # Single intervention object
-                interventions_data = [result]
-                logger.info("Found single intervention object")
+            raw_items = []
+            if isinstance(result, dict) and isinstance(result.get('interventions'), list):
+                raw_items = result['interventions']
             elif isinstance(result, list):
-                interventions_data = result
-                logger.info(f"Found list with {len(interventions_data)} items")
-            else:
-                # Look for any key that could contain an array of interventions
-                for key, value in result.items():
-                    if isinstance(value, list) and len(value) > 0:
-                        if isinstance(value[0], dict) and "claim_text" in value[0]:
-                            interventions_data = value
-                            logger.info(f"Found list under key '{key}' with {len(value)} items")
-                            break
+                raw_items = result
+            # Validate and normalize items
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                if not all(k in item for k in ("claim_text", "intervention_text", "intervention_type")):
+                    continue
+                interventions_data.append({
+                    "claim_text": str(item["claim_text"]).strip(),
+                    "intervention_text": str(item["intervention_text"]).strip(),
+                    "intervention_type": str(item["intervention_type"]).strip().lower(),
+                    "sources": item.get("sources", [])
+                })
+            logger.info(f"Validated {len(interventions_data)} interventions from LLM response")
                 
-            logger.info(f"Found {len(interventions_data)} interventions in GPT-4o response")
+            logger.info(f"Found {len(interventions_data)} interventions in LLM response")
             
             # Evenly distribute interventions if we have more than one
             intervention_count = len(interventions_data)
@@ -2040,8 +2132,8 @@ Only include meaningful factual statements that require verification."""
             # Sort interventions by timestamp
             interventions.sort(key=lambda x: x.timestamp_start)
             
-            # Limit number of interventions if needed
-            max_interventions = self.config.get('max_interventions', 4)
+            # Limit number of interventions if needed (cap 3)
+            max_interventions = self.config.get('max_interventions', 3)
             if len(interventions) > max_interventions:
                 logger.info(f"Limiting from {len(interventions)} to {max_interventions} interventions")
                 
@@ -2369,7 +2461,55 @@ Only include meaningful factual statements that require verification."""
         width = video_info['width']
         height = video_info['height']
         duration = video_info['duration']
+
+        # Hard cap duration and audio presence/quality gates
+        max_dur = float(self.config.get('max_video_duration_seconds', 60))
+        if duration > max_dur:
+            raise RuntimeError(f"Video length {duration:.2f}s exceeds max {max_dur:.0f}s")
+
+        if self.config.get('skip_videos_without_audio', True):
+            # Check audio presence and mean volume
+            try:
+                ffprobe = self.config['ffmpeg_path'].replace('ffmpeg','ffprobe')
+                # Use volumedetect to estimate mean volume
+                cmd = [self.config['ffmpeg_path'], '-i', video_path, '-af', 'volumedetect', '-f', 'null', '-']
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                stderr = res.stderr
+                has_audio = ('Audio:' in stderr)
+                if not has_audio:
+                    raise RuntimeError('No audio stream detected')
+                mean_db = None
+                for line in stderr.splitlines():
+                    if 'mean_volume:' in line:
+                        try:
+                            mean_db = float(line.split('mean_volume:')[1].split(' dB')[0].strip())
+                        except Exception:
+                            pass
+                threshold = float(self.config.get('audio_mean_volume_db_threshold', -50.0))
+                if mean_db is not None and mean_db < threshold:
+                    raise RuntimeError(f"Audio too quiet (mean {mean_db} dB < threshold {threshold} dB)")
+            except Exception as e:
+                raise RuntimeError(f"Audio check failed: {e}")
         
+        # Optional: Prepend a short cold-open hook segment
+        hook_segment_path: Optional[str] = None
+        if self.config.get("enable_hook", True):
+            try:
+                hook_segment_path = self._create_hook_segment(
+                    video_path=video_path,
+                    temp_dir=str(temp_dir),
+                    width=width,
+                    height=height,
+                    duration_seconds=min(max(0.8, float(self.config.get("hook_duration_seconds", 1.2))), 1.5),
+                    headline_text=self._generate_hook_text(interventions)
+                )
+                if hook_segment_path and os.path.exists(hook_segment_path) and os.path.getsize(hook_segment_path) > 0:
+                    logger.info(f"Hook segment created: {hook_segment_path}")
+                else:
+                    hook_segment_path = None
+            except Exception as e:
+                logger.warning(f"Failed to create hook segment: {e}")
+
         # ------------------------------------------------------------------
         # GUARANTEE MINIMUM OPENING ORIGINAL SEGMENT
         # ------------------------------------------------------------------
@@ -2498,30 +2638,29 @@ Only include meaningful factual statements that require verification."""
                     adjusted_cut_time_for_original = sentence_end_ts
                 else:
                     logger.info(f"No suitable sentence end found before {original_segment_intended_end:.2f}s for intervention {i}. Using original cut time.")
-            
-                            # Ensure cut time is not before the current read head and not after intended end
-                adjusted_cut_time_for_original = max(adjusted_cut_time_for_original, current_original_video_read_head)
-                adjusted_cut_time_for_original = min(adjusted_cut_time_for_original, original_segment_intended_end)
 
-                # Calculate segment duration
-                segment_duration = adjusted_cut_time_for_original - current_original_video_read_head
+            # Ensure cut time is not before the current read head and not after intended end
+            adjusted_cut_time_for_original = max(adjusted_cut_time_for_original, current_original_video_read_head)
+            adjusted_cut_time_for_original = min(adjusted_cut_time_for_original, original_segment_intended_end)
+
+            # Calculate segment duration
+            segment_duration = adjusted_cut_time_for_original - current_original_video_read_head
+            
+            # Ensure minimum segment duration
+            min_segment_duration = self.config.get('min_segment_duration', 3.0)
+            if segment_duration > 0 and segment_duration < min_segment_duration:
+                # Try to extend the segment to reach minimum duration
+                needed_extension = min_segment_duration - segment_duration
                 
-                # Ensure minimum segment duration
-                min_segment_duration = self.config.get('min_segment_duration', 3.0)
-                if segment_duration > 0 and segment_duration < min_segment_duration:
-                    # Try to extend the segment to reach minimum duration
-                    # We've already preprocessed to merge interventions, but we'll still enforce min duration here
-                    needed_extension = min_segment_duration - segment_duration
-                    
-                    # Check if we can extend within reasonable bounds (don't overlap with next intervention)
-                    max_extension = original_segment_intended_end - adjusted_cut_time_for_original
-                    if max_extension > 0:
-                        extension = min(needed_extension, max_extension)
-                        adjusted_cut_time_for_original += extension
-                        segment_duration += extension
-                        logger.info(f"Extended segment {i} by {extension:.2f}s to reach minimum duration")
-                    else:
-                        logger.warning(f"Could not extend segment {i} to reach minimum duration")
+                # Check if we can extend within reasonable bounds (don't overlap with next intervention)
+                max_extension = original_segment_intended_end - adjusted_cut_time_for_original
+                if max_extension > 0:
+                    extension = min(needed_extension, max_extension)
+                    adjusted_cut_time_for_original += extension
+                    segment_duration += extension
+                    logger.info(f"Extended segment {i} by {extension:.2f}s to reach minimum duration")
+                else:
+                    logger.warning(f"Could not extend segment {i} to reach minimum duration")
             
             logger.info(f"\n----- ORIGINAL SEGMENT {i} (Pre-Intervention) -----")
             logger.info(f"Reading from original video at {current_original_video_read_head:.2f}s for {segment_duration:.2f}s (intended end: {original_segment_intended_end:.2f}s, actual cut: {adjusted_cut_time_for_original:.2f}s)")
@@ -2869,6 +3008,16 @@ Only include meaningful factual statements that require verification."""
         for i, segment in enumerate(valid_segments):
             logger.info(f"  {i+1}. {segment['type']} segment: {segment['path']} (debug_index: {segment.get('debug_index', 'N/A')})")
         
+        # If we have a hook segment, insert it at the start of the sequence
+        if hook_segment_path:
+            valid_segments.insert(0, {
+                "type": "hook",
+                "path": hook_segment_path,
+                "debug_index": -1,
+                "sequence_name": "hook"
+            })
+            expected_sequence.insert(0, "hook")
+
         # Create concatenation file
         concat_file = str(temp_dir / "concat.txt")
         with open(concat_file, 'w') as f:
@@ -3185,8 +3334,19 @@ Only include meaningful factual statements that require verification."""
             # Add watermark to the successful concatenated video
             try:
                 logger.info("\n===== ADDING WATERMARK =====")
+                # Add watermark + optional progress bar overlay
                 watermarked_output = str(output_dir / "factual_output_watermarked.mp4")
                 self._add_watermark(output_path, watermarked_output)
+                if self.config.get("enable_progress_bar", True):
+                    logger.info("Adding progress bar overlay")
+                    with_progress = str(output_dir / "factual_output_progress.mp4")
+                    self._add_progress_bar(watermarked_output, with_progress)
+                    # replace intermediate
+                    try:
+                        os.remove(watermarked_output)
+                    except Exception:
+                        pass
+                    watermarked_output = with_progress
                 
                 # Replace original output with watermarked version
                 os.remove(output_path)
@@ -3218,6 +3378,67 @@ Only include meaningful factual statements that require verification."""
         logger.info(f"\n===== PROCESS COMPLETE =====")
         logger.info(f"Composite video created at: {output_path}")
         return output_path
+
+    def _generate_hook_text(self, interventions: List[Intervention]) -> str:
+        """Generate a concise hook text (6–10 words) from interventions.
+        Fallbacks to a neutral, curiosity-inducing line if none.
+        """
+        try:
+            if interventions:
+                # Prefer first correction claim
+                first = None
+                for it in interventions:
+                    if it.intervention_type.lower().strip() == "correction":
+                        first = it
+                        break
+                if not first:
+                    first = interventions[0]
+                base = first.claim_text or first.intervention_text or "Wait before you share this"
+                # Simple word limit
+                words = base.split()
+                if len(words) > 10:
+                    base = " ".join(words[:10]) + "…"
+                prefix = "False or true?" if first.intervention_type.lower() == "correction" else "Did you know?"
+                return f"{prefix} {base}"
+        except Exception:
+            pass
+        return "Before you believe this…"
+
+    def _create_hook_segment(self, video_path: str, temp_dir: str, width: int, height: int,
+                              duration_seconds: float, headline_text: str) -> Optional[str]:
+        """Create a short hook segment from the start of the original video with a headline overlay.
+        Returns the path to the created segment or None on failure.
+        """
+        try:
+            os.makedirs(temp_dir, exist_ok=True)
+            out_path = str(Path(temp_dir) / "hook_segment.mp4")
+
+            # Sanitize headline for drawtext
+            text = headline_text.replace("'", "\'").replace(":", "\\:")
+            # Position near top safe area
+            draw = (
+                f"drawbox=x=0:y=0:w=0:h=0:t=fill:color=black@0.0, "  # no-op to ensure chain
+                f"drawtext=text='{text}':fontcolor=white:fontsize=72:"
+                f"box=1:boxcolor=black@0.35:boxborderw=20:" 
+                f"x=(w-tw)/2:y=h*0.12"
+            )
+
+            cmd = [
+                self.config['ffmpeg_path'],
+                "-ss", "0",
+                "-i", video_path,
+                "-t", f"{duration_seconds}",
+                "-vf", f"scale={width}:{height},format=yuv420p,{draw}",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-c:a", "aac", "-b:a", "192k",
+                "-y", out_path
+            ]
+            subprocess.run(cmd, check=True, capture_output=True)
+            return out_path if os.path.exists(out_path) and os.path.getsize(out_path) > 0 else None
+        except Exception as e:
+            logger.warning(f"Hook creation failed: {e}")
+            return None
     
     def _get_video_info(self, video_path: str) -> Dict[str, Any]:
         """Accurately obtain width/height/duration of the *primary* video stream using ffprobe JSON.
@@ -3678,8 +3899,10 @@ Only include meaningful factual statements that require verification."""
             logger.error(f"FFmpeg stderr: {stderr_output}")
             # Fallback logic with centralized positioning
             logger.info("Attempting fallback method for black frame creation (draws a space as text, no intervention watermark).")
-            x_offset_px = text_params['text_x_offset_px']
-            target_w_px = text_params['text_width_px']
+            # Fallback safe positions if text_params is unavailable in this error path
+            x_offset_px = int(width * 0.08)
+            target_w_px = int(width * 0.84)
+            text_y_position = int(height * 0.35)
             draw_text_fallback_segment = f"drawtext=text=' ':fontcolor=white:fontsize={fontsize_val}:x={x_offset_px}:y={text_y_position}:boxw={target_w_px}:line_spacing=20:borderw=2:expansion=none"
             try:
                 fallback_cmd_parts = [
@@ -3822,6 +4045,62 @@ Only include meaningful factual statements that require verification."""
                 except Exception as e_copy_final:
                     logger.error(f"All watermark methods failed, and final copy also failed: {str(e_copy_final)}")
                     raise RuntimeError(f"All watermark methods failed: {str(e_copy_final)}")
+
+    def _add_progress_bar(self, input_path: str, output_path: str) -> None:
+        """Overlay a dynamic progress bar at the bottom of the video.
+        Uses drawbox to render background and foreground with time-based width.
+        """
+        try:
+            info = self._get_video_info(input_path)
+            total = max(0.1, float(info.get("duration", 0.1)))
+            height = int(info.get("height", 1920))
+            width = int(info.get("width", 1080))
+
+            bar_h = int(self.config.get("progress_bar_height_px", 12))
+            margin_ratio = float(self.config.get("progress_bar_margin_ratio", 0.94))
+            width_ratio = float(self.config.get("progress_bar_width_ratio", 0.90))
+            bg_alpha = float(self.config.get("progress_bar_bg_alpha", 0.15))
+            fg_color = self.config.get("progress_bar_fg_color", "#00E5FF")
+
+            x = f"{width}*{(1 - width_ratio)/2:.4f}"
+            y = f"{height}*{margin_ratio:.4f}"
+            w = f"{width}*{width_ratio:.4f}"
+            h = str(bar_h)
+
+            # two drawboxes: background and animated foreground
+            filter_complex = (
+                f"drawbox=x={x}:y={y}:w={w}:h={h}:t=fill:color=white@{bg_alpha:.2f},"
+                f"drawbox=x={x}:y={y}:w=({w})*(t/{total:.4f}):h={h}:t=fill:color={fg_color}@0.95"
+            )
+
+            has_audio = False
+            try:
+                chk = subprocess.run([self.config['ffmpeg_path'], "-i", input_path, "-hide_banner"],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                has_audio = "Audio: " in chk.stderr
+            except Exception:
+                pass
+
+            cmd = [
+                self.config['ffmpeg_path'],
+                "-i", input_path,
+                "-vf", filter_complex,
+                "-c:v", "libx264",
+            ]
+            if has_audio:
+                cmd += ["-c:a", "aac", "-b:a", "192k"]
+            else:
+                cmd += ["-an"]
+            cmd += ["-y", output_path]
+
+            subprocess.run(cmd, check=True, capture_output=True)
+        except Exception as e:
+            logger.warning(f"Progress bar overlay failed: {e}. Copying input to output.")
+            try:
+                import shutil
+                shutil.copy2(input_path, output_path)
+            except Exception:
+                raise
     
     def generate_manifest(self, 
                          input_path: str, 
@@ -4080,17 +4359,45 @@ Only include meaningful factual statements that require verification."""
                     pass
         
         return preview_path
+
+    def _export_auto_cover_thumbnail(self, video_path: str) -> Optional[str]:
+        """Export a frame near the start of the final output to be used as an IG cover.
+        For simplicity, pick frame at 0.3s (likely within hook) and write `factual_summary_slide.png` sibling.
+        """
+        try:
+            if not self.config.get("enable_auto_cover_thumbnail", True):
+                return None
+            out_dir = Path(video_path).parent
+            cover_path = str(out_dir / "factual_summary_slide.png")
+            # Use ffmpeg to extract a frame; ensure png format
+            cmd = [
+                self.config['ffmpeg_path'],
+                "-ss", "0.3",
+                "-i", video_path,
+                "-vframes", "1",
+                "-y", cover_path
+            ]
+            subprocess.run(cmd, check=True, capture_output=True)
+            return cover_path if os.path.exists(cover_path) and os.path.getsize(cover_path) > 0 else None
+        except Exception as e:
+            logger.warning(f"Failed to export auto cover thumbnail: {e}")
+            return None
     
-    def process_reel(self, url: str) -> Dict[str, str]:
+    def process_reel(self, url: str, session_id: str = None) -> Dict[str, str]:
         """Process a social media video through the entire pipeline.
         
         Args:
             url: URL of the social media video (Instagram or Facebook)
+            session_id: Optional session ID for this processing (for batch isolation)
             
         Returns:
             Dictionary with paths to output files
         """
         logger.info(f"Starting processing for content: {url}")
+        
+        # Set session ID for this processing if provided
+        if session_id is not None:
+            self.session_id = session_id
         
         # Reset detailed transcript for this session
         self.full_transcript_with_words = None
@@ -4147,7 +4454,7 @@ Only include meaningful factual statements that require verification."""
         # Step 5: Create composite video
         output_path = self._execute_with_retry(self.create_composite_video, video_path, interventions)
         
-        # Step 5.5: Generate summary slide PNG (if enabled)
+        # Step 5.5: Generate summary slide PNG (if enabled) or auto-cover thumbnail
         summary_slide_path = ""
         if self.config.get('generate_summary_slide', True):
             try:
@@ -4159,16 +4466,27 @@ Only include meaningful factual statements that require verification."""
                     logger.warning("Summary slide generation failed")
             except Exception as e:
                 logger.warning(f"Summary slide generation failed: {str(e)}")
+        else:
+            # If full slide disabled, still export a cover thumbnail from the video
+            try:
+                cover = self._export_auto_cover_thumbnail(output_path)
+                if cover:
+                    summary_slide_path = cover
+                    logger.info(f"Auto cover thumbnail created: {cover}")
+            except Exception as e:
+                logger.warning(f"Auto cover export failed: {e}")
         
         # Step 6: Generate manifest and preview
         metadata = {"source_platform": platform, "source_url": url}
         manifest_path = self._execute_with_retry(self.generate_manifest, video_path, output_path, interventions, metadata)
         preview_path = self._execute_with_retry(self.generate_preview, output_path, interventions)
 
-        # ===== ADD CLOSING FRAME (1 SECOND) =====
+        # ===== ADD CTA END-CARD (configurable duration) =====
         try:
             closing_frame_img = Path("assets/closing_frame.png")
-            if closing_frame_img.exists():
+            cta_text = self.config.get("cta_text", "Follow for more fact checks")
+            cta_duration = float(self.config.get("cta_duration_seconds", 2.0))
+            if self.config.get("enable_cta_end_card", True) and closing_frame_img.exists():
                 # Match the geometry of the just-rendered video so concat will accept it
                 video_info = self._get_video_info(output_path)
                 target_w = video_info.get("width", 1080)
@@ -4176,23 +4494,40 @@ Only include meaningful factual statements that require verification."""
 
                 closing_temp_dir = Path(self.config['temp_dir']) / self.session_id
                 closing_temp_dir.mkdir(parents=True, exist_ok=True)
+                base_closing = str(closing_temp_dir / "closing_frame_base.mp4")
                 closing_video = str(closing_temp_dir / "closing_frame.mp4")
 
-                # 1. Create a 1-second clip from the PNG WITH a silent stereo track
+                # 1. Create a clip from the PNG WITH a silent stereo track
                 create_closing_cmd = [
                     self.config['ffmpeg_path'],
                     "-loop", "1",               # hold the frame
                     "-i", str(closing_frame_img),
                     "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:r=48000",  # silent audio
-                    "-t", "1",                  # total duration 1 s
+                    "-t", f"{cta_duration}",    # total duration
                     "-vf", f"scale={target_w}:{target_h},format=yuv420p",
                     "-c:v", "libx264",
                     "-c:a", "aac", "-b:a", "192k",
                     "-shortest",                # stop when the shortest input ends (video)
                     "-pix_fmt", "yuv420p",
-                    "-y", closing_video
+                    "-y", base_closing
                 ]
                 subprocess.run(create_closing_cmd, check=True, capture_output=True)
+
+                # 1.1 Add CTA text overlay on top of the base closing clip
+                # Safe sanitize
+                cta_text_sanitized = cta_text.replace("'", "\'").replace(":", "\\:")
+                overlay_cmd = [
+                    self.config['ffmpeg_path'],
+                    "-i", base_closing,
+                    "-vf", (
+                        "drawtext=text='" + cta_text_sanitized + "':fontcolor=white:fontsize=72:" \
+                        "box=1:boxcolor=black@0.35:boxborderw=20:x=(w-tw)/2:y=h*0.12"
+                    ),
+                    "-c:v", "libx264",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-y", closing_video
+                ]
+                subprocess.run(overlay_cmd, check=True, capture_output=True)
 
                 # 2. Concatenate the main output and the closing clip (streams now line up)
                 concat_file = str(closing_temp_dir / "concat_closing.txt")
@@ -4607,7 +4942,7 @@ Requirements:
 Return only the condensed text, nothing else."""
 
             response = client.chat.completions.create(
-                model="gpt-4o-mini",  # Use mini for cost efficiency on this simple task
+                model=self.config.get("llm_mini_model", "gpt-5-nano"),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -4637,7 +4972,7 @@ Return only the condensed text, nothing else."""
 Output format: Just the condensed text, no quotes, under {max_length} characters."""
 
                 retry_response = client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model=self.config.get("llm_mini_model", "gpt-5-nano"),
                     messages=[{"role": "user", "content": aggressive_prompt}],
                     max_tokens=80,
                     temperature=0.1
@@ -5913,6 +6248,9 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
             logger.info(f"Processing URL {results['processed'] + 1}/{len(urls)} (line {line_num}): {url}")
             
             try:
+                # Generate unique session ID for this reel to prevent file conflicts
+                reel_session_id = f"{timestamp}_{line_num:03d}"
+                
                 # Create individual output directory for this reel
                 url_safe = re.sub(r'[^\w\-_.]', '_', url.split('/')[-1] or f"reel_{line_num}")
                 reel_output_dir = os.path.join(batch_output_dir, f"{results['processed'] + 1:03d}_{url_safe}")
@@ -5922,8 +6260,8 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
                 original_output_dir = self.config.get('output_dir', 'output')
                 self.config['output_dir'] = reel_output_dir
                 
-                # Process the reel
-                reel_result = self.process_reel(url)
+                # Process the reel with unique session ID
+                reel_result = self.process_reel(url, session_id=reel_session_id)
                 
                 # Add metadata to result
                 reel_result['line_number'] = line_num
@@ -6422,7 +6760,7 @@ If no sources found, return: [{{"title": "No sources found", "description": "No 
             client = OpenAI(api_key=self.config['openai_api_key'])
             
             response = client.chat.completions.create(
-                model="gpt-4",
+                model=self.config.get("llm_model", "gpt-5-nano"),
                 messages=[
                     {
                         "role": "system", 
@@ -6585,7 +6923,7 @@ Format as JSON array:
 [{{"title": "...", "description": "...", "url": "..."}}]"""
 
             response = client.chat.completions.create(
-                model="gpt-4",
+                model=self.config.get("llm_model", "gpt-5-nano"),
                 messages=[
                     {
                         "role": "system", 
