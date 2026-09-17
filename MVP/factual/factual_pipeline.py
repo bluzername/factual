@@ -29,6 +29,19 @@ import platform
 from PIL import Image, ImageDraw, ImageFont
 import math
 
+# Make sibling modules importable regardless of the caller's working directory
+_MODULE_DIR = str(Path(__file__).resolve().parent)
+if _MODULE_DIR not in sys.path:
+    sys.path.insert(0, _MODULE_DIR)
+
+from model_config import (
+    DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_MINI_MODEL,
+    DEFAULT_WHISPER_MODEL,
+    DEFAULT_TTS_MODEL,
+    DEFAULT_TTS_VOICE_ID,
+)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -64,7 +77,7 @@ class OpenAIClient:
                 raise APIClientError("OpenAI package not installed. Install with: pip install openai")
         return self._client
         
-    def transcribe_audio(self, audio_file_path: str, model: str = "large-v3") -> Dict[str, Any]:
+    def transcribe_audio(self, audio_file_path: str, model: str = DEFAULT_WHISPER_MODEL) -> Dict[str, Any]:
         """Transcribe audio using OpenAI Whisper.
         
         Args:
@@ -148,7 +161,7 @@ Only include meaningful factual statements that require verification."""
         
         try:
             response = self.client.chat.completions.create(
-                model=self.config.get("llm_model", "gpt-5-nano"),
+                model=self.config.get("llm_model", DEFAULT_LLM_MODEL),
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -187,7 +200,8 @@ Only include meaningful factual statements that require verification."""
 class ElevenLabsClient:
     """Client for interacting with ElevenLabs API."""
     
-    def __init__(self, api_key: str, voice_id: str = "21m00Tcm4TlvDq8ikWAM"):
+    def __init__(self, api_key: str, voice_id: str = DEFAULT_TTS_VOICE_ID,
+                 model_id: str = DEFAULT_TTS_MODEL):
         """Initialize with ElevenLabs API key.
         
         Args:
@@ -196,6 +210,7 @@ class ElevenLabsClient:
         """
         self.api_key = api_key
         self.voice_id = voice_id
+        self.model_id = model_id
         self.base_url = "https://api.elevenlabs.io/v1"
         
     def validate_api_key(self) -> bool:
@@ -299,7 +314,7 @@ class ElevenLabsClient:
         
         data = {
             "text": text,
-            "model_id": "eleven_turbo_v2",
+            "model_id": self.model_id,
             "voice_settings": voice_settings
         }
         
@@ -1409,8 +1424,9 @@ class SegmentProcessor:
 DEFAULT_CONFIG = {
     "openai_api_key": "",
     "elevenlabs_api_key": "",
-    "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",  # Default voice
-    "whisper_model": "whisper-1",
+    "elevenlabs_voice_id": DEFAULT_TTS_VOICE_ID,  # ElevenLabs voice id (env ELEVENLABS_VOICE_ID)
+    "tts_model": DEFAULT_TTS_MODEL,         # ElevenLabs model id (env FACTUAL_TTS_MODEL)
+    "whisper_model": DEFAULT_WHISPER_MODEL, # OpenAI transcription model (env FACTUAL_WHISPER_MODEL)
     # ASR Backend Configuration
     "asr_backend": "auto",             # 'auto', 'parakeet', 'faster_whisper', 'openai'
     "parakeet_device": "auto",         # 'auto', 'cuda', 'cpu'
@@ -1422,8 +1438,8 @@ DEFAULT_CONFIG = {
     "local_whisper_compute": "int8",   # faster-whisper compute type
     "whisper_device": "auto",
     # LLM models
-    "llm_model": "gpt-5-nano",         # Primary LLM for claim extraction, sources, verification
-    "llm_mini_model": "gpt-5-nano",    # Lightweight LLM for condensation or cheaper ops
+    "llm_model": DEFAULT_LLM_MODEL,          # Primary LLM (env FACTUAL_LLM_MODEL)
+    "llm_mini_model": DEFAULT_LLM_MINI_MODEL, # Lightweight LLM for condensation (env FACTUAL_LLM_MINI_MODEL)
     "watermark_path": "assets/logo_watermark.png",
     "output_dir": "output",
     "temp_dir": "temp",
@@ -2036,7 +2052,7 @@ Only include meaningful factual statements that require verification."""
         
         try:
             response = client.chat.completions.create(
-                model=self.config.get("llm_model", "gpt-5-nano"),
+                model=self.config.get("llm_model", DEFAULT_LLM_MODEL),
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -2253,7 +2269,7 @@ Only include meaningful factual statements that require verification."""
                     # Pass 1: Generate with default speed to get base duration
                     pass1_data = {
                         "text": intervention.intervention_text,
-                        "model_id": "eleven_turbo_v2", # Ensure this model is appropriate
+                        "model_id": self.config.get("tts_model", DEFAULT_TTS_MODEL),
                         "voice_settings": {**voice_settings, "speed": 1.0} 
                     }
                     
@@ -2318,7 +2334,7 @@ Only include meaningful factual statements that require verification."""
                 
                 final_data = {
                     "text": text_to_use,
-                    "model_id": "eleven_turbo_v2", 
+                    "model_id": self.config.get("tts_model", DEFAULT_TTS_MODEL),
                     "voice_settings": final_voice_settings
                 }
 
@@ -2345,7 +2361,7 @@ Only include meaningful factual statements that require verification."""
                     }
                     fallback_data = {
                         "text": text_to_use,  # Use the same validated text
-                        "model_id": "eleven_turbo_v2", 
+                        "model_id": self.config.get("tts_model", DEFAULT_TTS_MODEL),
                         "voice_settings": fallback_voice_settings
                     }
                     
@@ -4942,7 +4958,7 @@ Requirements:
 Return only the condensed text, nothing else."""
 
             response = client.chat.completions.create(
-                model=self.config.get("llm_mini_model", "gpt-5-nano"),
+                model=self.config.get("llm_mini_model", DEFAULT_LLM_MINI_MODEL),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -4972,7 +4988,7 @@ Return only the condensed text, nothing else."""
 Output format: Just the condensed text, no quotes, under {max_length} characters."""
 
                 retry_response = client.chat.completions.create(
-                    model=self.config.get("llm_mini_model", "gpt-5-nano"),
+                    model=self.config.get("llm_mini_model", DEFAULT_LLM_MINI_MODEL),
                     messages=[{"role": "user", "content": aggressive_prompt}],
                     max_tokens=80,
                     temperature=0.1
@@ -5671,7 +5687,7 @@ Output format: Just the condensed text, no quotes, under {max_length} characters
             
             data = {
                 "text": narration_text,
-                "model_id": "eleven_turbo_v2",
+                "model_id": self.config.get("tts_model", DEFAULT_TTS_MODEL),
                 "voice_settings": voice_settings
             }
             
@@ -6760,7 +6776,7 @@ If no sources found, return: [{{"title": "No sources found", "description": "No 
             client = OpenAI(api_key=self.config['openai_api_key'])
             
             response = client.chat.completions.create(
-                model=self.config.get("llm_model", "gpt-5-nano"),
+                model=self.config.get("llm_model", DEFAULT_LLM_MODEL),
                 messages=[
                     {
                         "role": "system", 
@@ -6923,7 +6939,7 @@ Format as JSON array:
 [{{"title": "...", "description": "...", "url": "..."}}]"""
 
             response = client.chat.completions.create(
-                model=self.config.get("llm_model", "gpt-5-nano"),
+                model=self.config.get("llm_model", DEFAULT_LLM_MODEL),
                 messages=[
                     {
                         "role": "system", 
