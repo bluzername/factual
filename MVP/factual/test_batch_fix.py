@@ -7,11 +7,23 @@ and output directory without file conflicts.
 """
 
 import os
+import shutil
+import sys
 import tempfile
 import json
 from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent))
 from unified_processor import FactualProcessor
 
+
+@pytest.mark.skipif(
+    not (os.environ.get("OPENAI_API_KEY") and os.environ.get("ELEVENLABS_API_KEY"))
+    or shutil.which("ffmpeg") is None,
+    reason="requires OPENAI_API_KEY, ELEVENLABS_API_KEY and ffmpeg (end-to-end API test)",
+)
 def test_session_isolation():
     """Test that batch processing creates unique sessions for each URL"""
     

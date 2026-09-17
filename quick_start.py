@@ -62,39 +62,38 @@ def check_dependencies():
     """Check if required Python packages are installed."""
     print("\n📦 Checking Python dependencies...")
     
+    # (pip distribution name, import name)
     required_packages = [
-        "openai",
-        "elevenlabs", 
-        "requests",
-        "Pillow",
-        "numpy"
+        ("openai", "openai"),
+        ("requests", "requests"),
+        ("Pillow", "PIL"),
+        ("numpy", "numpy"),
     ]
-    
+
     optional_packages = [
-        "cloudinary",
-        "boto3",
-        "python-dotenv"
+        ("cloudinary", "cloudinary"),
+        ("boto3", "boto3"),
     ]
-    
+
     missing_required = []
     missing_optional = []
-    
-    for package in required_packages:
+
+    for package, module_name in required_packages:
         try:
-            __import__(package)
+            __import__(module_name)
             print(f"✅ {package}")
         except ImportError:
             missing_required.append(package)
             print(f"❌ {package} (required)")
-    
-    for package in optional_packages:
+
+    for package, module_name in optional_packages:
         try:
-            __import__(package)
+            __import__(module_name)
             print(f"✅ {package}")
         except ImportError:
             missing_optional.append(package)
             print(f"⚠️  {package} (optional)")
-    
+
     if missing_required:
         print(f"\n❌ Missing required packages: {', '.join(missing_required)}")
         print("Install with: pip install " + " ".join(missing_required))

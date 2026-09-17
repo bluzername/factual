@@ -26,7 +26,7 @@ This agentic workflow orchestrates the complete process:
 
 ## 📋 Prerequisites
 
-1. **Python 3.8+** with required packages
+1. **Python 3.10+** with the root requirements installed (`pip install -r requirements.txt`)
 2. **Existing Factual Pipeline** (MVP/factual directory)
 3. **Instagram Business Account** with Graph API access
 4. **File Storage Service** (Cloudinary, AWS S3, or similar)
@@ -42,7 +42,7 @@ This agentic workflow orchestrates the complete process:
 
 2. **Install additional dependencies**:
    ```bash
-   pip install cloudinary boto3 python-dotenv  # Choose based on your upload provider
+   pip install -r requirements.txt  # includes cloudinary and boto3 upload providers
    ```
 
 3. **Place workflow files in project root**:

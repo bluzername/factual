@@ -22,6 +22,7 @@ wheels/
 MANIFEST
 
 # Virtual environments
+.venv/
 venv/
 env/
 ENV/
@@ -51,7 +52,20 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Project specific
+# Project specific: generated media and run artifacts (any depth)
+output/
+temp/
+workflow_output/
+test_output/
+test_temp/
+models_cache/
+*.mp4
+*.mp3
+*.wav
+*.rtf
+trending_reels_insights.csv
+asr_config.json
+workflow_config.json
 MVP/factual/temp/
 MVP/factual/output/
 MVP/factual/*.mp4
@@ -75,6 +89,8 @@ secrets.json
 *.tmp
 *.temp
 .cache/
+.pytest_cache/
+.ruff_cache/
 
 # FFmpeg temporary files
 *.ffmpeg

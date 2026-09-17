@@ -6,23 +6,22 @@ help:
 	@echo "Usage:"
 	@echo "  make setup    - Set up the environment (create directories, sample watermark)"
 	@echo "  make test     - Run the test suite"
-	@echo "  make lint     - Run linters (flake8, mypy)"
-	@echo "  make format   - Format code (black, isort)"
+	@echo "  make lint     - Run ruff and a byte-compile check"
+	@echo "  make format   - Format code with ruff"
 	@echo "  make clean    - Remove temporary files and directories"
 
 setup:
 	python setup.py
 
 test:
-	pytest -xvs test_pipeline.py
+	python -m pytest .
 
 lint:
-	flake8 factual_pipeline.py test_pipeline.py setup.py
-	mypy factual_pipeline.py test_pipeline.py setup.py
+	ruff check .
+	python -m compileall -q .
 
 format:
-	black factual_pipeline.py test_pipeline.py setup.py
-	isort factual_pipeline.py test_pipeline.py setup.py
+	ruff format .
 
 clean:
 	rm -rf temp/* output/*

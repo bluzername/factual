@@ -16,6 +16,7 @@ import logging
 import tempfile
 import subprocess
 from abc import ABC, abstractmethod
+from model_config import DEFAULT_WHISPER_MODEL
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 # Optional imports - handled within backends
@@ -350,7 +351,7 @@ class OpenAIWhisperBackend(ASRBackend):
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.api_key = config.get('openai_api_key', '')
-        self.model = config.get('whisper_model', 'whisper-1')
+        self.model = config.get('whisper_model', DEFAULT_WHISPER_MODEL)
     
     def is_available(self) -> bool:
         """Check if OpenAI API is available"""

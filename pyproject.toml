@@ -1,0 +1,14 @@
+[tool.pytest.ini_options]
+testpaths = ["MVP/factual"]
+python_files = ["test_*.py"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = [".venv", "output", "temp", "workflow_output"]
+
+[tool.ruff.lint]
+# Syntax errors, undefined names and unused imports only; the codebase
+# predates the linter and a full style pass is out of scope.
+select = ["E9", "F63", "F7", "F82"]
