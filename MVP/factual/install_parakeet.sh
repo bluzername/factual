@@ -17,16 +17,16 @@ check_python() {
     echo "🐍 Checking Python version..."
     
     if ! command_exists python3; then
-        echo "❌ Python 3 not found. Please install Python 3.8+ first."
+        echo "❌ Python 3 not found. Please install Python 3.10+ first."
         exit 1
     fi
     
     python_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
     echo "✅ Python $python_version detected"
     
-    # Check if version is >= 3.8
-    if ! python3 -c "import sys; exit(0 if sys.version_info >= (3, 8) else 1)"; then
-        echo "❌ Python 3.8+ required. Found Python $python_version"
+    # Check if version is >= 3.10
+    if ! python3 -c "import sys; exit(0 if sys.version_info >= (3, 10) else 1)"; then
+        echo "❌ Python 3.10+ required. Found Python $python_version"
         exit 1
     fi
 }

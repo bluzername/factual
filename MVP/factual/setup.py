@@ -9,7 +9,19 @@ import sys
 from pathlib import Path
 import argparse
 
+PYTHON_REQUIRES = (3, 10)
+
+
+def check_python_version():
+    """Fail fast on interpreters older than the supported minimum."""
+    if sys.version_info < PYTHON_REQUIRES:
+        required = ".".join(str(part) for part in PYTHON_REQUIRES)
+        found = f"{sys.version_info.major}.{sys.version_info.minor}"
+        sys.exit(f"Factual requires Python {required}+ (found {found})")
+
+
 def main():
+    check_python_version()
     parser = argparse.ArgumentParser(description="Set up the Factual pipeline environment")
     parser.add_argument("--force", action="store_true", help="Force recreation of directories and sample files")
     args = parser.parse_args()
@@ -65,8 +77,8 @@ def main():
         print(f"Watermark already exists: {watermark_path}")
     
     print("\nSetup complete!")
-    print("To use the pipeline, update config.json with your API keys and run:")
-    print("python factual_pipeline.py https://www.instagram.com/reel/YOUR_REEL_ID/")
+    print("Set OPENAI_API_KEY and ELEVENLABS_API_KEY (see .env.example) and run:")
+    print("python factual_cli.py https://www.instagram.com/reel/YOUR_REEL_ID/")
 
 if __name__ == "__main__":
     main() 
