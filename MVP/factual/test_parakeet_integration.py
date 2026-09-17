@@ -20,7 +20,18 @@ import unittest
 import logging
 from pathlib import Path
 from typing import Dict, List, Any
-import torch
+import shutil
+
+import pytest
+
+# These tests exercise the real Parakeet/NeMo stack and the sample pipeline.
+# They only run when torch is installed, ffmpeg is on PATH and an OpenAI key
+# is present for the API fallback backend.
+torch = pytest.importorskip("torch")
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY") or shutil.which("ffmpeg") is None,
+    reason="requires OPENAI_API_KEY and ffmpeg (network/API integration test)",
+)
 
 # Add current directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
