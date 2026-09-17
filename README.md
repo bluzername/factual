@@ -1,221 +1,158 @@
-# Factual - AI-Powered Social Media Fact-Checking Pipeline
+# Factual
 
-An automated pipeline that downloads social media videos (Instagram/Facebook), extracts factual claims, generates AI-powered fact-checking interventions, and creates enhanced videos with embedded corrections and confirmations.
+Fact-checking pipeline for short social videos. Give it an Instagram or Facebook reel URL and it downloads the video, transcribes it, extracts factual claims with an OpenAI model, writes corrections or confirmations with sources, narrates them with ElevenLabs TTS, and renders an enhanced mp4 with freeze-frame interventions, a summary slide, an HTML report and an Instagram-ready description.
 
-## 🎯 Overview
+The pipeline lives in `MVP/factual/`. The repo root also holds an optional agentic workflow that runs the pipeline in a queue and can post results to Instagram (see [Agentic Instagram workflow](#agentic-instagram-workflow)).
 
-Factual automatically:
-1. **Downloads** social media videos from Instagram/Facebook
-2. **Transcribes** audio using OpenAI Whisper
-3. **Extracts** factual claims using GPT-4o
-4. **Generates** fact-checking commentary with sources
-5. **Creates** TTS narration using ElevenLabs
-6. **Produces** enhanced videos with freeze-frame interventions
-7. **Outputs** source citations for credibility
+## Requirements
 
-## 🚀 Features
+- Python 3.10 or newer
+- `ffmpeg` and `ffprobe` on PATH (`brew install ffmpeg` / `apt install ffmpeg`)
+- `yt-dlp` (installed by the requirements file)
+- An OpenAI API key and an ElevenLabs API key
+- Optional: ImageMagick for preview images, an NVIDIA GPU for the local Parakeet ASR backend
 
-- **Multi-platform support**: Instagram and Facebook videos
-- **AI-powered fact-checking**: Uses GPT-4o for claim identification and commentary
-- **Professional TTS**: ElevenLabs integration for natural narration
-- **Visual interventions**: Grayscale freeze-frames with overlaid text
-- **Source citations**: Automatic generation of credible source lists
-- **Batch processing**: Handle multiple URLs efficiently
-- **Quality outputs**: Summary slides, previews, and manifests
-
-## 📋 Requirements
-
-- Python 3.8+
-- FFmpeg
-- OpenAI API key
-- ElevenLabs API key
-- ImageMagick (optional, for preview generation)
-
-## 🛠️ Installation
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/bluzername/factual.git
-   cd factual
-   ```
-
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Install FFmpeg**:
-   - **macOS**: `brew install ffmpeg`
-   - **Ubuntu**: `sudo apt install ffmpeg`
-   - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html)
-
-4. **Install ImageMagick** (optional):
-   - **macOS**: `brew install imagemagick`
-   - **Ubuntu**: `sudo apt install imagemagick`
-
-## ⚙️ Configuration
-
-1. **Copy the example config**:
-   ```bash
-   cp MVP/factual/docs/env.example MVP/factual/.env
-   ```
-
-2. **Edit the configuration**:
-   ```bash
-   nano MVP/factual/.env
-   ```
-
-3. **Set your API keys**:
-   ```env
-   OPENAI_API_KEY=your_openai_api_key_here
-   ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
-   ```
-
-## 🎬 Usage
-
-### Single Video Processing
+## Install
 
 ```bash
-cd MVP/factual
-./run_factual.sh "https://www.instagram.com/reel/EXAMPLE_ID/"
+git clone https://github.com/bluzername/factual.git
+cd factual
+python -m venv .venv && source .venv/bin/activate
+pip install -r MVP/factual/requirements.txt
+cp .env.example .env   # then fill in the keys
 ```
 
-### Batch Processing
-
-1. **Create a batch file** with URLs (one per line):
-   ```txt
-   https://www.instagram.com/reel/EXAMPLE1/
-   https://www.instagram.com/reel/EXAMPLE2/
-   https://www.facebook.com/watch?v=EXAMPLE3
-   ```
-
-2. **Run batch processing**:
-   ```bash
-   ./run_factual.sh --batch batch_urls.txt
-   ```
-
-### Command Line Options
+Optional local ASR backends (Parakeet via NeMo, faster-whisper):
 
 ```bash
-# Basic usage
-python factual_pipeline.py "URL"
-
-# With custom config
-python factual_pipeline.py --config custom_config.json "URL"
-
-# Debug options
-python factual_pipeline.py --debug-all "URL"
-
-# Disable features
-python factual_pipeline.py --no-text --no-summary "URL"
-
-# Use sample video for testing
-python factual_pipeline.py --use-sample "URL"
+pip install -r MVP/factual/requirements_asr.txt
+# or the guided installer: cd MVP/factual && ./install_parakeet.sh --download-model
 ```
 
-## 📁 Output Structure
+Without them the pipeline transcribes through the OpenAI Whisper API.
 
-Each run creates a timestamped folder:
+## Configuration
 
-```
-output/20250714121435/
-├── factual_output.mp4          # Final enhanced video
-├── factual_output.json         # Detailed manifest
-├── factual_summary_slide.png   # Summary slide for manual addition
-├── preview.jpg                 # Visual preview of interventions
-├── sources.txt                 # Source citations for description
-└── batch_summary.json          # (Batch mode only)
-```
+### Environment variables
 
-## 🔧 Configuration Options
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `OPENAI_API_KEY` | yes | - | Claim extraction, sourcing, text condensation, Whisper API |
+| `ELEVENLABS_API_KEY` | yes | - | TTS narration; validated with a live request at startup |
+| `FACTUAL_LLM_MODEL` | no | `gpt-5-nano` | Primary chat model |
+| `FACTUAL_LLM_MINI_MODEL` | no | `gpt-5-nano` | Cheaper model for text condensation |
+| `FACTUAL_WHISPER_MODEL` | no | `whisper-1` | OpenAI transcription model |
+| `FACTUAL_TTS_MODEL` | no | `eleven_flash_v2` | ElevenLabs model id |
+| `ELEVENLABS_VOICE_ID` | no | `21m00Tcm4TlvDq8ikWAM` | ElevenLabs voice |
+| `IG_ACCESS_TOKEN`, `IG_BUSINESS_USER_ID` | no | - | Only for `get_trending_reels_insights.py` |
 
-Key configuration parameters in `config.json`:
+Model ids are defined once in `MVP/factual/model_config.py`. The shell wrappers export `.env` automatically; when calling the Python entry points directly, export the variables first (`set -a; source .env; set +a`).
+
+### JSON config file
+
+Every entry point accepts `--config path.json`. Keys override `DEFAULT_CONFIG` in `factual_pipeline.py`. The ones you are most likely to change:
 
 ```json
 {
-  "max_interventions": 4,
-  "max_intervention_text_length": 250,
+  "asr_backend": "auto",
+  "parakeet_device": "auto",
+  "llm_model": "gpt-5-nano",
+  "tts_model": "eleven_flash_v2",
+  "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
+  "max_interventions": 3,
+  "max_intervention_text_length": 200,
   "enable_tts_speed_adjustment": true,
-  "render_intervention_text": true,
-  "include_summary_frame": true,
-  "generate_summary_slide": true
+  "generate_summary_slide": true,
+  "watermark_path": "assets/logo_watermark.png",
+  "ffmpeg_path": "ffmpeg",
+  "yt_dlp_path": "yt-dlp",
+  "output_dir": "output",
+  "temp_dir": "temp"
 }
 ```
 
-## 🎨 Customization
+`asr_backend` accepts `auto`, `parakeet`, `faster_whisper` or `openai`; `auto` picks the best installed backend and falls back to the API. API keys may also be set in the JSON file, but environment variables are preferred.
 
-### Watermarks
-- Place custom watermarks in `assets/`
-- Configure paths in `config.json`
+## Usage
 
-### Voice Settings
-- Modify ElevenLabs voice ID in config
-- Adjust TTS speed and quality settings
+All commands run from `MVP/factual/`.
 
-### Visual Style
-- Customize intervention text formatting
-- Modify freeze-frame appearance
-- Adjust summary slide layout
-
-## 🔍 Debugging
-
-Enable debug options for troubleshooting:
+### Recommended: unified CLI (v2)
 
 ```bash
-# Visual checkpoints
-python factual_pipeline.py --debug-visual "URL"
-
-# Save individual segments
-python factual_pipeline.py --debug-segments "URL"
-
-# Detailed sequence manifest
-python factual_pipeline.py --debug-manifest "URL"
-
-# All debug options
-python factual_pipeline.py --debug-all "URL"
+cd MVP/factual
+python factual_cli.py "https://www.instagram.com/reel/ABC123/"
+python factual_cli.py --batch urls.txt
+python factual_cli.py --batch urls.txt --config custom_config.json --verbose
 ```
 
-## 📊 Example Output
+`run_factual_v2.sh` wraps the same processor and also sources `.env`:
 
-### Video Structure
-1. **Original content** (0:00-0:38)
-2. **Factual intervention** (freeze-frame + narration)
-3. **Original content** continues
-4. **Additional interventions** as needed
-5. **Summary frame** (optional)
-
-### Sources.txt Format
-```
-- Fluoride effectively reduces dental cavities — CDC, 2023 (https://www.cdc.gov/fluoridation/)
-- High fluoride exposure may pose neurotoxic risks — Harvard School of Public Health, 2022 (https://www.hsph.harvard.edu/...)
+```bash
+./run_factual_v2.sh "https://www.instagram.com/reel/ABC123/"
+./run_factual_v2.sh --batch urls.txt [config.json]
+./run_factual_v2.sh --legacy --batch urls.txt   # old single-session pipeline
 ```
 
-## 🤝 Contributing
+Batch files hold one URL per line; blank lines and lines starting with `#` are ignored.
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Commit changes: `git commit -am 'Add feature'`
-4. Push to branch: `git push origin feature-name`
-5. Submit a pull request
+### Legacy pipeline entry point
 
-## 📄 License
+`factual_pipeline.py` (also wrapped by `run_factual.sh`) keeps the original flags:
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+```bash
+python factual_pipeline.py "URL" [--config cfg.json]
+python factual_pipeline.py --batch urls.txt
+python factual_pipeline.py --no-text --no-summary --no-slide "URL"
+python factual_pipeline.py --debug-visual --debug-segments --debug-manifest "URL"   # or --debug-all
+python factual_pipeline.py --use-sample "URL"   # synthetic sample video, no download
+```
 
-## 🙏 Acknowledgments
+Note: legacy batch mode reuses one session id for every URL; use the unified CLI for batches.
 
-- OpenAI for GPT-4o and Whisper APIs
-- ElevenLabs for TTS technology
-- FFmpeg for video processing
-- The fact-checking community for inspiration
+### Outputs
 
-## 📞 Support
+Single runs write to `output/<timestamp>/`, batches to `output/batch_<timestamp>/NNN_<id>/`. Each reel directory contains the enhanced video, `manifest.json`, `metrics.json` (views, likes, comments via yt-dlp), an HTML summary with sources, an Instagram description, a copyable sources text file and, unless disabled, `factual_summary_slide.png` for manual insertion in an editor. Batch runs add `batch_summary.json`, `batch_summary.txt`, `batch_summary.html` and `batch_metrics.csv`.
 
-For issues and questions:
-- Create an issue on GitHub
-- Check the [documentation](docs/)
-- Review debug logs for troubleshooting
+### Other tools in `MVP/factual/`
 
----
+- `setup.py` creates `assets/`, `output/`, `temp/` and a placeholder watermark (`make setup`).
+- `get_trending_reels_insights.py --hashtag TAG ...` pulls reel metrics for hashtags through the Instagram Graph API into `trending_reels_insights.csv`.
+- `docs/ffmpeg_commands.md` documents the ffmpeg filter graphs used, `docs/example_manifest.json` shows the manifest format.
 
-**Factual** - Making social media more credible, one video at a time. 
+## Agentic Instagram workflow
+
+`agentic_workflow.py` at the repo root queues reel URLs, runs the pipeline for each, uploads the result (Cloudinary, S3 or a file-share service via `file_uploader.py`) and can publish to Instagram through the Graph API. Auto-posting is off by default.
+
+```bash
+pip install -r requirements.txt                       # pipeline plus cloudinary/boto3
+python agentic_workflow.py create-config --output workflow_config.json
+python agentic_workflow.py --config workflow_config.json add --file reel_urls.txt
+python agentic_workflow.py --config workflow_config.json run --no-auto-post
+python agentic_workflow.py --config workflow_config.json status
+```
+
+`quick_start.py` is an interactive setup wizard for the same workflow and `example_batch_runner.py` shows programmatic use. State and results land in `workflow_output/`. Full option reference: [AGENTIC_WORKFLOW_README.md](AGENTIC_WORKFLOW_README.md). `workflow_config.json` contains credentials and is git-ignored.
+
+## Development
+
+```bash
+pip install -r MVP/factual/requirements-dev.txt
+python -m pytest -rs                 # offline unit tests; integration tests skip without keys/ffmpeg/torch
+ruff check .
+python -m compileall -q MVP/factual
+```
+
+CI (`.github/workflows/ci.yml`) runs the same three commands on Python 3.10 and 3.12. `test_parakeet_integration.py` and `test_batch_fix.py` only run when `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, `ffmpeg` and (for Parakeet) `torch` are available.
+
+## Known limitations
+
+- `FactualPipeline.__init__` validates the ElevenLabs key with a network call, so the pipeline cannot be constructed offline.
+- `factual_pipeline.py` is a 7000-line module; the unified processor wraps it rather than replacing it.
+- Instagram and Facebook downloads depend on `yt-dlp` keeping up with platform changes.
+- The `speed` voice setting is only honoured by some ElevenLabs models; the pipeline retries without it on API errors.
+- Two legacy unit tests are skipped because they target methods removed in the v2 refactor.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
