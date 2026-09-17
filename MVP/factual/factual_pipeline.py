@@ -2010,7 +2010,7 @@ For each claim:
 Format your response as a JSON object with an array field named "interventions".
 Each intervention should have these fields:
 - claim_text: The exact claim from the transcript (≤120 chars)
-- intervention_text: Your factual commentary (correction or confirmation) — **~{max_text_length} characters max**
+- intervention_text: Your factual commentary (correction or confirmation) - **~{max_text_length} characters max**
 - intervention_type: Either "correction" or "confirmation"
 - sources: **array of up to 3 objects**. Each object must have:
     • title – full title of the study/article/report
@@ -2019,7 +2019,7 @@ Each intervention should have these fields:
 
 Example source object:
 {{
-  "title": "Measles, Mumps, Rubella Vaccination and Autism — A Nationwide Cohort Study",
+  "title": "Measles, Mumps, Rubella Vaccination and Autism - A Nationwide Cohort Study",
   "description": "Annals of Internal Medicine (2019), Denmark study with 657,461 children, found no increased autism risk after MMR vaccination",
   "url": "https://www.acpjournals.org/doi/10.7326/M18-2101"
 }}
