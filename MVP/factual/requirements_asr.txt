@@ -4,7 +4,7 @@
 
 # NVIDIA Parakeet TDT 0.6B v2 via NeMo (recommended local backend)
 nemo_toolkit[asr]>=2.2.0
-torch>=2.0.0
+torch>=2.14.0
 torchaudio>=2.0.0
 soundfile>=0.12.1
 
