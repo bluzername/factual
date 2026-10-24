@@ -3,7 +3,7 @@
 # External tools also required on PATH: ffmpeg (and ffprobe).
 # Python 3.10 or newer.
 openai>=1.5.0
-requests>=2.31.0
+requests>=2.34.2
 pillow>=9.0.0
 numpy>=1.21.0
 yt-dlp>=2024.1.1
