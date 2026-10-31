@@ -5,5 +5,5 @@
 openai>=3.39.0
 requests>=2.34.2
 pillow>=9.0.0
-numpy>=1.21.0
+numpy>=2.5.4
 yt-dlp>=2026.10.21
