@@ -9,4 +9,4 @@ torchaudio>=2.0.0
 soundfile>=0.12.1
 
 # Lightweight local Whisper alternative
-faster-whisper>=1.0.0
+faster-whisper>=1.2.1
