@@ -6,4 +6,4 @@
 # Upload providers used by file_uploader.py (imported lazily; install the
 # one you configure)
 cloudinary>=1.36.0
-boto3>=1.26.0
+boto3>=1.43.126
