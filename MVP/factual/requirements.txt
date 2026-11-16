@@ -6,4 +6,4 @@ openai>=3.42.1
 requests>=2.34.2
 pillow>=9.0.0
 numpy>=1.21.0
-yt-dlp>=2026.10.21
+yt-dlp>=2026.10.26
