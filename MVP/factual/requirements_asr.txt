@@ -6,7 +6,7 @@
 nemo_toolkit[asr]>=3.0.0
 torch>=2.14.0
 torchaudio>=2.11.1
-soundfile>=0.12.1
+soundfile>=0.14.0
 
 # Lightweight local Whisper alternative
 faster-whisper>=1.2.1
